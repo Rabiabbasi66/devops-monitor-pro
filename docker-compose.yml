@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      DATABASE_NAME: devops_monitor_pro
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      FRONTEND_URL: http://localhost:8501
+      DEBUG: "false"
+    depends_on:
+      - mongodb
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    environment:
+      API_URL: http://localhost:8000/api
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+
+  agent:
+    build: ./agent
+    environment:
+      API_URL: http://backend:8000/api
+      SERVER_ID: ${SERVER_ID:-}
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
+      INTERVAL_SECONDS: 30
+    depends_on:
+      - backend
+    profiles:
+      - agent
+
+volumes:
+  mongodb_data:
