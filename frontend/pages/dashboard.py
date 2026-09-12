@@ -108,7 +108,7 @@ def render(api: APIClient):
     with c8:
         st.metric(
             "💾 Avg Memory", 
-            f"{stats.get('avg_memory_usage', 0):.1f}%",
+            f"{stats.get('avg_memory', 0):.1f}%",
             delta=None,
             help="Average memory usage across all servers"
         )
@@ -116,7 +116,7 @@ def render(api: APIClient):
     with c9:
         st.metric(
             "🖥️ Avg CPU", 
-            f"{stats.get('avg_cpu_usage', 0):.1f}%",
+            f"{stats.get('avg_cpu', 0):.1f}%",
             delta=None,
             help="Average CPU usage across all servers"
         )
@@ -124,7 +124,7 @@ def render(api: APIClient):
     st.divider()
 
     # =========================================================
-    # SERVER OVERVIEW CARDS
+    # SERVER OVERVIEW TABLE
     # =========================================================
     
     st.markdown("### 🖥️ Server Overview")
@@ -136,85 +136,37 @@ def render(api: APIClient):
         st.warning("No servers data available")
         return
     
-    # Create beautiful server cards
-    for i in range(0, len(servers), 3):
-        cols = st.columns(3)
-        for j, server in enumerate(servers[i:i+3]):
-            with cols[j]:
-                # Get detailed server data
-                server_id = server.get("id")
-                if server_id:
-                    detail_resp = api.get(f"/servers/{server_id}")
-                    if detail_resp.status_code == 200:
-                        server.update(detail_resp.json())
-                
-                # Extract values safely
-                name = server.get("name", "Unknown")
-                status = server.get("status", "unknown")
-                health = server.get("health_status", "unknown")
-                
-                try:
-                    cpu = float(server.get("cpu_usage", 0) or 0)
-                except (TypeError, ValueError):
-                    cpu = 0.0
-                
-                try:
-                    memory = float(server.get("memory_usage", 0) or 0)
-                except (TypeError, ValueError):
-                    memory = 0.0
-                
-                try:
-                    disk = float(server.get("disk_usage", 0) or 0)
-                except (TypeError, ValueError):
-                    disk = 0.0
-                
-                # Health indicators
-                health_colors = {
-                    "healthy": "#00ff00",
-                    "warning": "#ffaa00",
-                    "critical": "#ff0000",
-                    "offline": "#666666",
-                    "unknown": "#aaaaaa"
-                }
-                color = health_colors.get(str(health).lower(), "#aaaaaa")
-                
-                # Card styling
-                st.markdown(f"""
-                <div style="
-                    background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
-                    border-left: 4px solid {color};
-                    padding: 15px;
-                    border-radius: 8px;
-                    margin-bottom: 10px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                ">
-                    <h4 style="margin: 0 0 10px 0; color: white;">{name}</h4>
-                    <div style="display: flex; gap: 15px; color: #ccc; font-size: 12px;">
-                        <span>Status: <strong>{status}</strong></span>
-                        <span>Health: <strong>{health}</strong></span>
-                    </div>
-                    <div style="margin-top: 10px; display: flex; gap: 15px;">
-                        <div style="flex: 1;">
-                            <div style="font-size: 11px; color: #888;">CPU</div>
-                            <div style="font-size: 16px; font-weight: bold; color: white;">{cpu:.1f}%</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-size: 11px; color: #888;">Memory</div>
-                            <div style="font-size: 16px; font-weight: bold; color: white;">{memory:.1f}%</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-size: 11px; color: #888;">Disk</div>
-                            <div style="font-size: 16px; font-weight: bold; color: white;">{disk:.1f}%</div>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if st.button("📊 View Details", key=f"dash_detail_{server_id}", use_container_width=True):
-                    st.session_state.selected_server = server_id
-                    st.session_state.page = "Server Detail"
-                    st.rerun()
+    # Create DataFrame for better display
+    server_data = []
+    for server in servers:
+        server_data.append({
+            "Name": server.get("name", "Unknown"),
+            "Status": server.get("status", "unknown"),
+            "Health": server.get("health_status", "unknown"),
+            "CPU": f"{server.get('cpu_usage', 0):.1f}%",
+            "Memory": f"{server.get('memory_usage', 0):.1f}%",
+            "Disk": f"{server.get('disk_usage', 0):.1f}%",
+            "Uptime": f"{server.get('uptime', 0) / 3600:.1f}h" if server.get('uptime') else "N/A",
+            "Last Seen": server.get('last_seen', 'N/A')[:19] if server.get('last_seen') else 'N/A',
+        })
+    
+    df = pd.DataFrame(server_data)
+    
+    # Health status styling (pandas 2.x: use .map, not deprecated .applymap)
+    def highlight_health(val):
+        if val == "healthy":
+            return 'background-color: rgba(0, 255, 0, 0.2)'
+        elif val == "warning":
+            return 'background-color: rgba(255, 165, 0, 0.2)'
+        elif val == "critical":
+            return 'background-color: rgba(255, 0, 0, 0.2)'
+        elif val == "offline":
+            return 'background-color: rgba(128, 128, 128, 0.2)'
+        return ''
 
+    styled_df = df.style.map(highlight_health, subset=['Health'])
+    st.dataframe(styled_df, use_container_width=True, height=300)
+    
     st.divider()
 
     # =========================================================
@@ -272,17 +224,33 @@ def render(api: APIClient):
             row=2, col=1
         )
         
-        # Network (placeholder - would need network data)
-        fig.add_trace(
-            go.Scatter(
-                x=names,
-                y=[0] * len(servers),  # Placeholder
-                name="Network",
-                mode='markers+lines',
-                marker_color="#8b5cf6"
-            ),
-            row=2, col=2
-        )
+        # Network received (bytes since boot — cumulative counter, shown as-is)
+        net_rx = [s.get("network_received", None) for s in servers]
+        # Only show if at least one server has non-zero network data
+        if any(v and v > 0 for v in net_rx):
+            fig.add_trace(
+                go.Bar(
+                    x=names,
+                    y=[v or 0 for v in net_rx],
+                    name="Net RX (bytes)",
+                    marker_color="#8b5cf6",
+                    text=[f"{(v or 0)/1e6:.0f}MB" for v in net_rx],
+                    textposition='auto'
+                ),
+                row=2, col=2
+            )
+        else:
+            # Placeholder when network data not yet available
+            fig.add_trace(
+                go.Scatter(
+                    x=names,
+                    y=[0] * len(servers),
+                    name="Network (pending)",
+                    mode='markers',
+                    marker_color="#8b5cf6"
+                ),
+                row=2, col=2
+            )
         
         fig.update_layout(
             height=600,

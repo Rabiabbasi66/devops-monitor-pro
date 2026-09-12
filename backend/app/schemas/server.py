@@ -10,6 +10,10 @@ class ServerCreate(BaseModel):
     ip_address: str
     server_type: str
     tags: List[str] = []
+    environment: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    owner: Optional[str] = None
 
     @field_validator("ip_address")
     @classmethod
@@ -27,6 +31,11 @@ class ServerUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=50)
     server_type: Optional[str] = None
     tags: Optional[List[str]] = None
+    environment: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    owner: Optional[str] = None
+    monitoring_enabled: Optional[bool] = None
 
 
 class ServerStatusUpdate(BaseModel):
@@ -49,6 +58,9 @@ class ServerResponse(BaseModel):
     health_status: HealthStatus
     hostname: Optional[str] = None
     operating_system: Optional[str] = None
+    os_version: Optional[str] = None
+    architecture: Optional[str] = None
+    platform: Optional[str] = None
     cpu_usage: float
     memory_usage: float
     disk_usage: float
@@ -56,7 +68,14 @@ class ServerResponse(BaseModel):
     response_time_ms: Optional[float] = None
     last_checked: datetime
     last_seen: Optional[datetime] = None
+    agent_version: Optional[str] = None
+    agent_status: str
     tags: List[str]
+    environment: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    owner: Optional[str] = None
+    monitoring_enabled: bool
     user_id: str
     agent_token: Optional[str] = None
     thresholds: ServerThreshold

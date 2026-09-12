@@ -1,6 +1,7 @@
 import secrets
 from datetime import datetime, timedelta
 
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
@@ -94,7 +95,14 @@ async def enroll_agent(request: EnrollmentRequest):
         )
 
     # Verify server still exists
-    server = await Server.get(enrollment.server_id)
+    try:
+        server_oid = PydanticObjectId(enrollment.server_id)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Enrollment record has an invalid server ID",
+        )
+    server = await Server.get(server_oid)
 
     if not server:
         raise HTTPException(
@@ -107,6 +115,7 @@ async def enroll_agent(request: EnrollmentRequest):
 
     # Update server with agent token
     server.agent_token = agent_token
+    server.agent_status = "active"
     server.updated_at = datetime.utcnow()
 
     await server.save()
@@ -123,3 +132,21 @@ async def enroll_agent(request: EnrollmentRequest):
         api_url=f"{settings.BACKEND_URL.rstrip('/')}/api",
         interval_seconds=30,
     )
+
+
+@router.delete("/{server_id}/enrollment", summary="Revoke all enrollment tokens")
+async def revoke_enrollment_tokens(
+    server_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Revoke all unused enrollment tokens for a server."""
+    server = await server_service.get_server(server_id, current_user)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    deleted_count = await AgentEnrollment.find(
+        AgentEnrollment.server_id == server_id,
+        AgentEnrollment.used == False,
+    ).delete()
+
+    return {"success": True, "revoked_tokens": deleted_count}

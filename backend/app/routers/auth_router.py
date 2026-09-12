@@ -27,11 +27,11 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserRegister):
-    existing_email = await User.find_one(User.email == user_data.email)
+    existing_email = await User.find_one({"email": user_data.email})
     if existing_email:
         raise HTTPException(status_code=409, detail="Email already registered")
 
-    existing_username = await User.find_one(User.username == user_data.username)
+    existing_username = await User.find_one({"username": user_data.username})
     if existing_username:
         raise HTTPException(status_code=409, detail="Username already taken")
 
@@ -68,7 +68,7 @@ async def register(user_data: UserRegister):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(login_data: UserLogin, request: Request):
-    user = await User.find_one(User.email == login_data.email)
+    user = await User.find_one({"email": login_data.email})
     if not user or not verify_password(login_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -102,6 +102,13 @@ async def refresh_token(body: RefreshTokenRequest):
     payload = decode_token(body.refresh_token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    # Ensure this is actually a refresh token, not an access token
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token type: refresh token required",
+        )
 
     user_id = payload.get("sub")
     if not user_id:

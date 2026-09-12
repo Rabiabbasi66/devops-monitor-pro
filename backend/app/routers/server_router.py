@@ -34,7 +34,7 @@ async def create_new_server(
     server = await server_service.create(
         server_data, current_user, ip=request.client.host if request.client else None
     )
-    return serialize_server(server, include_token=False)
+    return serialize_server(server, include_token=True)
 
 
 @router.get("/", response_model=List[ServerResponse], summary="List servers")

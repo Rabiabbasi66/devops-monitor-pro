@@ -65,7 +65,12 @@ class AlertService:
             str(server.id), metric_type, severity
         )
         if existing:
+            # Update occurrence count and last occurred time
+            existing.occurrence_count += 1
+            existing.last_occurred_at = datetime.utcnow()
+            await existing.save()
             return None
+        
         message = f"High {metric_type} usage on {server.name}: {value:.1f}% (threshold {threshold:.1f}%)"
         alert = await self.alert_repo.create(
             server=server,
@@ -141,6 +146,7 @@ class AlertService:
     async def acknowledge(self, alert: Alert, user: User, ip: Optional[str] = None) -> Alert:
         alert.status = AlertStatus.ACKNOWLEDGED
         alert.acknowledged_at = datetime.utcnow()
+        alert.acknowledged_by = str(user.id)
         await alert.save()
         await AuditLog(
             user_id=str(user.id),
@@ -155,6 +161,10 @@ class AlertService:
         alert.status = AlertStatus.RESOLVED
         alert.resolved = True
         alert.resolved_at = datetime.utcnow()
+        alert.resolved_by = str(user.id)
+        # Calculate duration
+        if alert.first_occurred_at:
+            alert.duration_seconds = (alert.resolved_at - alert.first_occurred_at).total_seconds()
         await alert.save()
         await AuditLog(
             user_id=str(user.id),

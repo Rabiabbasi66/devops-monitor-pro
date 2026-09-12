@@ -10,6 +10,21 @@ from datetime import datetime
 logger = logging.getLogger("devops_monitor")
 
 
+class NotificationSendResult:
+    """Detailed result of a provider send attempt.
+
+    ``error`` messages are static, human-readable strings and must NEVER
+    contain provider credentials (tokens, passwords, etc.).
+    """
+
+    def __init__(self, success: bool, error: Optional[str] = None):
+        self.success = success
+        self.error = error
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"NotificationSendResult(success={self.success}, error={self.error!r})"
+
+
 class NotificationProvider(ABC):
     """Base class for notification providers."""
     
@@ -17,6 +32,25 @@ class NotificationProvider(ABC):
         self.config = config
         self.enabled = config.get("enabled", False)
         self.name = self.__class__.__name__
+
+    def missing_config(self) -> Optional[str]:
+        """Return a human-readable message when required platform provider
+        configuration is missing, or None when the provider is fully
+        configured. Messages never include secret values.
+
+        Concrete providers override this method.
+        """
+        return None
+
+    def validate_recipient(self, recipient: str) -> Optional[str]:
+        """Return an error message when the recipient is invalid for this
+        provider, or None when it is valid.
+
+        Concrete providers override this method.
+        """
+        if not recipient or not str(recipient).strip():
+            return "Recipient is required"
+        return None
     
     @abstractmethod
     async def send(
@@ -41,6 +75,27 @@ class NotificationProvider(ABC):
             bool: True if notification was sent successfully, False otherwise
         """
         pass
+
+    async def send_with_result(
+        self,
+        recipient: str,
+        title: str,
+        message: str,
+        severity: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> NotificationSendResult:
+        """Send a notification and return a detailed result.
+
+        Default implementation wraps ``send()``; concrete providers override
+        this to surface specific error causes (auth failure, timeout, etc.).
+        """
+        try:
+            success = await self.send(recipient, title, message, severity, metadata)
+            return NotificationSendResult(success=success)
+        except Exception:
+            # Providers normally handle their own errors; this is a last resort
+            logger.exception("Provider %s raised unexpectedly", self.name)
+            return NotificationSendResult(success=False, error="Internal provider error")
     
     @abstractmethod
     async def send_test(self, recipient: str) -> bool:

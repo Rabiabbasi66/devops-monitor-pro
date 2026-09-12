@@ -30,7 +30,13 @@ class Alert(Document):
     threshold: float
     resolved: bool = False
     acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
     resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    occurrence_count: int = 1
+    first_occurred_at: datetime = Field(default_factory=datetime.utcnow)
+    last_occurred_at: datetime = Field(default_factory=datetime.utcnow)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
@@ -41,4 +47,5 @@ class Alert(Document):
             [("server_id", 1), ("metric_type", 1), ("status", 1)],
             [("severity", 1)],
             [("created_at", -1)],
+            [("first_occurred_at", -1)],
         ]

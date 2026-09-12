@@ -1,73 +1,107 @@
 import logging
-from typing import Union
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Request, status
-from fastapi.exceptions import RequestValidationError
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 logger = logging.getLogger("devops_monitor")
 
 
-def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(
-        request: Request, exc: StarletteHTTPException
-    ) -> JSONResponse:
-        code = _map_status_to_code(exc.status_code)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "success": False,
-                "error": {
-                    "code": code,
-                    "message": str(exc.detail),
-                },
-            },
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Request validation failed",
-                    "details": exc.errors(),
-                },
-            },
-        )
-
-    @app.exception_handler(Exception)
-    async def unhandled_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
-        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "An unexpected error occurred",
-                },
-            },
-        )
+class APIError(Exception):
+    """Base API error class."""
+    def __init__(
+        self,
+        message: str,
+        status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        self.message = message
+        self.status_code = status_code
+        self.details = details or {}
+        super().__init__(self.message)
 
 
-def _map_status_to_code(status_code: int) -> str:
-    mapping = {
-        400: "BAD_REQUEST",
-        401: "UNAUTHORIZED",
-        403: "FORBIDDEN",
-        404: "NOT_FOUND",
-        409: "CONFLICT",
-        422: "VALIDATION_ERROR",
-        429: "RATE_LIMITED",
-        500: "INTERNAL_ERROR",
-    }
-    return mapping.get(status_code, "HTTP_ERROR")
+class NotFoundError(APIError):
+    """Resource not found error."""
+    def __init__(self, message: str = "Resource not found", details: Optional[Dict[str, Any]] = None):
+        super().__init__(message, status.HTTP_404_NOT_FOUND, details)
+
+
+class UnauthorizedError(APIError):
+    """Unauthorized access error."""
+    def __init__(self, message: str = "Unauthorized access", details: Optional[Dict[str, Any]] = None):
+        super().__init__(message, status.HTTP_401_UNAUTHORIZED, details)
+
+
+class ForbiddenError(APIError):
+    """Forbidden access error."""
+    def __init__(self, message: str = "Access forbidden", details: Optional[Dict[str, Any]] = None):
+        super().__init__(message, status.HTTP_403_FORBIDDEN, details)
+
+
+class APIValidationError(APIError):
+    """Validation error."""
+    def __init__(self, message: str = "Validation failed", details: Optional[Dict[str, Any]] = None):
+        super().__init__(message, status.HTTP_422_UNPROCESSABLE_ENTITY, details)
+
+
+class ConflictError(APIError):
+    """Conflict error."""
+    def __init__(self, message: str = "Resource conflict", details: Optional[Dict[str, Any]] = None):
+        super().__init__(message, status.HTTP_409_CONFLICT, details)
+
+
+async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
+    """Handle custom API errors."""
+    logger.error(f"API Error: {exc.message} - Details: {exc.details}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": True,
+            "message": exc.message,
+            "details": exc.details,
+            "status_code": exc.status_code,
+        }
+    )
+
+
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Handle FastAPI validation errors."""
+    logger.warning(f"Validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": True,
+            "message": "Validation failed",
+            "details": {"errors": exc.errors()},
+            "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        }
+    )
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Handle HTTP exceptions."""
+    logger.warning(f"HTTP Exception: {exc.status_code} - {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": True,
+            "message": exc.detail,
+            "status_code": exc.status_code,
+        }
+    )
+
+
+async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle unexpected exceptions."""
+    logger.exception(f"Unexpected error: {str(exc)}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": True,
+            "message": "An unexpected error occurred",
+            "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        }
+    )

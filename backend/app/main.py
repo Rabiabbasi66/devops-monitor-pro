@@ -2,12 +2,19 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import close_db, init_db, ping_database
-from .middleware.error_handler import register_exception_handlers
+from .middleware.error_handler import (
+    APIError,
+    api_error_handler,
+    general_exception_handler,
+    http_exception_handler,
+    validation_error_handler,
+)
 from .middleware.logging import RequestLoggingMiddleware, setup_logging
 from .models import MODELS
 from .routers import (
@@ -24,6 +31,8 @@ from .routers import (
     agent_enrollment_router,
 )
 from .routers.notification_settings_router import router as notification_settings_router
+from .routers.alert_rules_router import router as alert_rules_router
+from .routers.incidents_router import router as incidents_router
 from .schemas.dashboard import HealthCheckResponse
 from .services.monitoring_service import MonitoringService
 
@@ -69,14 +78,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-register_exception_handlers(app)
+# Register exception handlers
+app.add_exception_handler(APIError, api_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
-origins = [
-    settings.FRONTEND_URL,
-    "http://localhost:8501",
-    "http://127.0.0.1:8501",
-    "http://localhost:3000",
-]
+origins = [settings.FRONTEND_URL]
+if settings.ENVIRONMENT == "development":
+    origins.extend([
+        "http://localhost:8501",
+        "http://127.0.0.1:8501",
+        "http://localhost:3000",
+    ])
 if settings.ALLOWED_ORIGINS != ["*"]:
     origins.extend(settings.ALLOWED_ORIGINS)
 
@@ -94,6 +108,8 @@ app.include_router(auth_router.router, prefix=api_prefix)
 app.include_router(server_router.router, prefix=api_prefix)
 app.include_router(metrics_router.router, prefix=api_prefix)
 app.include_router(alerts_router.router, prefix=api_prefix)
+app.include_router(alert_rules_router, prefix=api_prefix)
+app.include_router(incidents_router, prefix=api_prefix)
 app.include_router(monitoring_router.router, prefix=api_prefix)
 app.include_router(dashboard_router.router, prefix=api_prefix)
 app.include_router(notifications_router.router, prefix=api_prefix)

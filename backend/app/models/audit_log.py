@@ -17,6 +17,12 @@ class AuditAction(str, enum.Enum):
     ALERT_RESOLVED = "alert_resolved"
     ALERT_REOPENED = "alert_reopened"
     THRESHOLD_CHANGED = "threshold_changed"
+    ALERT_RULE_CREATED = "alert_rule_created"
+    ALERT_RULE_UPDATED = "alert_rule_updated"
+    ALERT_RULE_DELETED = "alert_rule_deleted"
+    INCIDENT_CREATED = "incident_created"
+    INCIDENT_UPDATED = "incident_updated"
+    INCIDENT_RESOLVED = "incident_resolved"
 
 
 class AuditLog(Document):

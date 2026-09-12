@@ -1,141 +1,99 @@
 # DevOps Monitor Pro
 
-Production-ready DevOps infrastructure monitoring platform with FastAPI, MongoDB, Streamlit dashboard, and a psutil-based monitoring agent.
+Production-ready infrastructure monitoring platform: **FastAPI + MongoDB (Beanie)** backend, **Streamlit** dashboard, and a **psutil-based monitoring agent** with automatic enrollment, threshold alerting, incident management and multi-channel notifications (Email/SMTP, WhatsApp, Telegram).
+
+All features documented below are implemented and verified by the test suite (`backend/tests/`, 113 tests) plus live end-to-end checks.
 
 ## Features
 
-### Core Functionality
-- User registration, JWT authentication, RBAC (admin/user)
-- Server CRUD with per-server agent tokens
-- **Automatic Agent Enrollment** - No manual token configuration required
-- Monitoring agent collects CPU, memory, disk, network, uptime, processes
-- Metric storage with retention and time-range queries
-- Automatic alert engine with configurable thresholds and deduplication
-- Alert lifecycle: pending → acknowledged → resolved → reopen
-- WebSocket real-time metric and alert streaming
-- In-app notifications
-- Audit logging (admin)
-- Dashboard summary API
-- Docker Compose deployment
-- GitHub Actions CI (tests + Docker build)
-
-### Advanced Dashboard
-- **Professional DevOps Monitoring Interface** - Modern, dark-themed UI
-- **Real-time Summary Metrics** - Total servers, online/offline status, critical warnings
-- **Advanced Server Cards** - Visual health indicators, status badges, live metrics
-- **Interactive Charts** - CPU, memory, disk, network usage over time
-- **Auto-refresh Capability** - Optional real-time updates
-- **Responsive Design** - Works on desktop, laptop, and tablet
-
-### Server Management
-- **Search and Filtering** - Find servers by name, IP, tags, or status
-- **Status Filtering** - Filter by online, offline, warning, critical
-- **Install Agent Wizard** - Step-by-step agent installation guide
-- **OS-specific Instructions** - Windows, Linux, macOS support
-- **Automatic Server Detection** - Servers appear automatically when agent connects
-- **Safe Delete Operations** - Confirmation before destructive actions
-
-### Server Detail View
-- **Comprehensive Metrics** - CPU, memory, disk, network, response time, uptime
-- **Time Range Selection** - 1, 6, 12, 24, 48, 72 hours
-- **Advanced Charts** - Multi-panel visualization with auto-refresh
-- **Threshold Configuration** - Customizable alert thresholds per server
-- **Alert History** - Server-specific alert timeline
-- **Auto-refresh Metrics** - Live monitoring capability
-
-### Alerts Management
-- **Severity Filtering** - Critical, high, medium, low
-- **Status Filtering** - Pending, acknowledged, resolved
-- **Unresolved Alerts View** - Focus on active issues
-- **Visual Severity Indicators** - Color-coded alert cards
-- **Bulk Actions** - Quick acknowledge, resolve, reopen
-- **Server Integration** - Direct navigation to affected servers
-
-### Notifications Center
-- **Unread Count** - Quick view of pending notifications
-- **Type-based Styling** - Different icons for alerts, warnings, info
-- **Mark as Read** - Individual notification management
-- **Server Context** - Direct server access from notifications
-- **Clean Interface** - Organized by read/unread status
-
-### Agent Enrollment System
-- **Short-lived Enrollment Tokens** - 15-30 minute expiration
-- **Single-use Tokens** - Enhanced security
-- **Automatic Configuration** - Agent saves credentials automatically
-- **Cross-platform Support** - Windows, Linux, macOS
-- **Fallback Support** - Existing .env configuration still works
-- **No Manual Token Entry** - Completely automated setup
+- **Users & Auth** — JWT access + refresh tokens, bcrypt password hashing, admin/user roles, ownership enforced on every protected route
+- **Server Management** — CRUD, per-server alert thresholds, environment/tags/description metadata, monitoring enable/disable, cascade delete of related data
+- **Agent Enrollment** — short-lived (20 min), single-use enrollment tokens exchanged for permanent agent tokens; tokens stored SHA-256 hashed
+- **Metric Ingestion** — agent POSTs CPU/memory/disk/network/uptime/system info with `X-Agent-Token`; unknown fields ignored for backward compatibility
+- **Health Calculation** — healthy / warning / critical / offline / unknown based on thresholds and last-seen age
+- **Alert Engine** — threshold evaluation on every ingest, deduplication within a cooldown window (occurrence counting instead of duplicate alerts), acknowledge/resolve/reopen, offline ("connectivity") alerts
+- **Recovery & Offline Detection** — background loop flags servers with no metrics past `SERVER_OFFLINE_THRESHOLD_SECONDS`, raises a critical connectivity alert and sends notifications; next successful ingest emits a recovery notification
+- **Alert Rules** — user-scoped CRUD with per-rule metric, operator, warning/critical thresholds, severity, cooldown and enable/disable
+- **Incidents** — grouped response records with acknowledge/resolve/reopen lifecycle, related-alert linking, ownership enforced
+- **Notifications** — in-app center plus external channels per user: Email (SMTP), WhatsApp (Meta Cloud API), Telegram (Bot API)
+  - Per-channel **minimum severity** filter (info/warning/high/critical)
+  - Per-channel **notification types** (alert / recovery / offline / security)
+  - Per-channel **cooldown** (seconds between sends)
+  - **Test notification** endpoint that performs a real provider send
+- **WebSocket** — live per-server metric and alert/health-change events, JWT-authenticated
+- **Audit Logging** — admin-visible log of logins and resource changes
+- **Metrics Retention** — background cleanup after `METRIC_RETENTION_DAYS`
 
 ## Architecture
 
 ```
-Dashboard (Streamlit)
-        │ REST / WebSocket
-        ▼
-   FastAPI API
-        │
-   ┌────┴────┬──────────┐
-   ▼         ▼          ▼
-MongoDB  Alert Engine  Notifications
-   ▲
-   │ POST /api/monitoring/metrics
-Monitoring Agent (psutil)
+Dashboard (Streamlit)                 Monitoring Agent (psutil)
+        │ REST                                │ REST (+ X-Agent-Token)
+        ▼                                     ▼
+┌────────────────────────  FastAPI  ────────────────────────┐
+│  auth / servers / metrics / alerts / alert-rules          │
+│  incidents / notifications / settings / admin / ws        │
+│        │                                                  │
+│  MonitoringService (health, offline loop, cleanup)        │
+│  AlertService (thresholds, dedup, lifecycle)              │
+│  NotificationService → Email | WhatsApp | Telegram        │
+│  WebSocketManager (per-server broadcast)                  │
+└────────────────────────────┬──────────────────────────────┘
+                             ▼
+                       MongoDB (Beanie ODM)
 ```
 
 ## Project Structure
 
 ```
-devops_monitor_pro/
 ├── backend/
-│   └── app/
-│       ├── main.py
-│       ├── config.py
-│       ├── database.py
-│       ├── models/
-│       │   ├── agent_enrollment.py  # NEW: Enrollment model
-│       │   ├── server.py
-│       │   ├── user.py
-│       │   ├── metric.py
-│       │   ├── alert.py
-│       │   └── notification.py
-│       ├── schemas/
-│       ├── services/
-│       ├── repositories/
-│       ├── routers/
-│       │   ├── agent_enrollment_router.py  # NEW: Enrollment endpoints
-│       │   ├── server_router.py
-│       │   ├── monitoring_router.py
-│       │   └── alerts_router.py
-│       ├── middleware/
-│       └── utils/
+│   ├── app/
+│   │   ├── main.py                  # FastAPI app, lifespan, background loop
+│   │   ├── config.py                # pydantic-settings (backend/.env)
+│   │   ├── database.py              # Motor client + init_beanie
+│   │   ├── auth.py                  # re-exports from utils.security
+│   │   ├── models/                  # Beanie documents (user, server, metric, alert,
+│   │   │                            #   alert_rule, incident, notification,
+│   │   │                            #   notification_settings, agent_enrollment,
+│   │   │                            #   telegram_connection, audit_log)
+│   │   ├── schemas/                 # Pydantic request/response models
+│   │   ├── repositories/            # Data-access layer
+│   │   ├── routers/                 # API route modules
+│   │   ├── services/                # Business logic + notification providers
+│   │   ├── middleware/              # Error handler + request logging
+│   │   └── utils/                   # security (JWT/bcrypt), validators, secret masking
+│   ├── tests/                       # pytest suite (113 tests)
+│   ├── _verify.py                   # static sanity checks (run: python _verify.py)
+│   ├── _smoke_test.py               # live smoke test against a running server
+│   ├── _e2e_test.py                 # live end-to-end flow test
+│   └── requirements.txt
 ├── frontend/
-│   ├── app.py                    # UPDATED: Modern login and navigation
-│   ├── api/client.py             # UPDATED: Better error handling
-│   └── pages/
-│       ├── dashboard.py          # UPDATED: Advanced dashboard
-│       ├── servers.py            # UPDATED: Search, filters, install wizard
-│       ├── server_detail.py      # UPDATED: Advanced charts, time ranges
-│       ├── alerts.py             # UPDATED: Filtering, severity indicators
-│       └── notifications.py      # UPDATED: Modern notification center
+│   ├── app.py                       # Streamlit shell + login/register
+│   ├── api/client.py                # REST client
+│   ├── pages/                       # dashboard, servers, server_detail, alerts,
+│   │                                #   incidents, notifications, settings
+│   └── config.py                    # API_URL from env
 ├── agent/
-│   ├── agent.py                  # UPDATED: Enrollment support
-│   ├── config.py
-│   ├── agent_config.json         # NEW: Auto-generated config
-│   └── collectors/
-├── tests/ (in backend/tests/)
+│   ├── agent.py                     # enrollment + metric loop with retries
+│   ├── config.py                    # API_URL / SERVER_ID / AGENT_TOKEN envs
+│   └── collectors/                  # psutil collectors (cpu, memory, disk,
+│                                    #   network, system, processes)
 ├── docker-compose.yml
-└── .github/workflows/
+└── .github/workflows/               # tests.yml (pytest + Mongo service), docker.yml
 ```
 
 ## Quick Start (Docker)
 
 ```bash
 cp backend/.env.example backend/.env
+# edit backend/.env: set SECRET_KEY to a strong random value before exposing anything
 docker compose up --build
 ```
 
-- API: http://localhost:8000/docs
+- API: http://localhost:8000 — docs at `/docs`
 - Dashboard: http://localhost:8501
+
+Note: inside compose the backend advertises `BACKEND_URL=http://backend:8000`, which is only reachable from the compose network. If agents enroll from machines **outside** the Docker host, set `BACKEND_URL` to the externally reachable URL (e.g. `http://your-host:8000`) via `backend/.env`.
 
 ## Local Development
 
@@ -144,11 +102,13 @@ docker compose up --build
 ```bash
 cd backend
 python -m venv venv
-venv\Scripts\activate   # Windows
+venv\Scripts\activate          # Windows  (source venv/bin/activate on Linux/macOS)
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env           # set SECRET_KEY at minimum
 uvicorn app.main:app --reload --port 8000
 ```
+
+Requires MongoDB at `MONGODB_URI` (default `mongodb://localhost:27017`).
 
 ### Frontend
 
@@ -157,138 +117,133 @@ cd frontend
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-set API_URL=http://localhost:8000/api
+# API_URL defaults to http://localhost:8000/api; override with env if needed
 streamlit run app.py
 ```
 
-### Monitoring Agent (NEW - Automatic Enrollment)
+### Agent Enrollment (recommended)
 
-**Option 1: Automatic Enrollment (Recommended)**
+The agent never needs a manually configured token:
 
-1. Create a server in the dashboard
-2. Click "Install Agent" on the server card
-3. Follow the step-by-step wizard:
-   - Select your operating system
-   - Generate enrollment token
-   - Copy and run the enrollment command
-   - Agent automatically configures and starts monitoring
+1. Log in to the dashboard → **Servers** → create a server.
+2. Click **Install Agent** → the wizard generates a 20-minute, single-use enrollment token and shows the exact command.
+3. Run it on the target machine:
 
 ```bash
-# Example enrollment command (provided by wizard)
 python agent.py --enroll "<ENROLLMENT_TOKEN>"
 ```
 
-**Option 2: Manual Configuration (Legacy)**
-
-```bash
-cd agent
-pip install -r requirements.txt
-cp .env.example .env
-# Set SERVER_ID and AGENT_TOKEN manually
-python agent.py
-```
-
-### Agent Configuration File
-
-After successful enrollment, the agent creates `agent_config.json`:
+The agent exchanges the token at `POST /api/agents/enroll`, receives its permanent agent token, saves `agent/agent_config.json` (gitignored), and starts sending metrics immediately.
 
 ```json
 {
   "server_id": "...",
   "agent_token": "...",
-  "api_url": "http://localhost:8000",
+  "api_url": "...",
   "interval_seconds": 30
 }
 ```
 
-The agent automatically uses this file on subsequent starts.
+On later starts the agent loads `agent_config.json` automatically. Without it, set `SERVER_ID` + `AGENT_TOKEN` (e.g. `agent/.env`) — this is also what the Docker agent profile uses.
 
-## Environment Variables
+**Alternative — static token:** creating a server also issues a permanent agent token in the create response, which admins can configure directly (this is what the test suite uses).
 
-|| Variable | Description | Default |
-||----------|-------------|---------|
-|| MONGODB_URI | MongoDB connection string | mongodb://localhost:27017 |
-|| DATABASE_NAME | Database name | devops_monitor_pro |
-|| SECRET_KEY | JWT signing key | (required in production) |
-|| FRONTEND_URL | CORS origin | http://localhost:8501 |
-|| BACKEND_URL | Backend URL for agent enrollment | http://localhost:8000 |
-|| METRIC_RETENTION_DAYS | Metric cleanup retention | 30 |
-|| ALERT_COOLDOWN_SECONDS | Alert dedup window | 300 |
-|| SERVER_OFFLINE_THRESHOLD_SECONDS | Offline detection | 120 |
-|| HEALTH_CHECK_INTERVAL_SECONDS | Background health check interval | 60 |
+### Revoking enrollment tokens
+
+`DELETE /api/agents/{server_id}/enrollment` deletes all unused enrollment tokens for a server.
+
+## Client Workflow (end to end)
+
+1. **Register/Login** — `POST /api/auth/register`, `POST /api/auth/login` (JWT pair).
+2. **Add server** — `POST /api/servers/`.
+3. **Enroll agent** — wizard or `POST /api/agents/{server_id}/enrollment` → `POST /api/agents/enroll`.
+4. **Metrics flow in** — agent `POST /api/monitoring/metrics` with `X-Agent-Token`; server document updates (CPU/RAM/disk/uptime/hostname/agent status) and each sample is stored in the metrics history.
+5. **Threshold breach → alert** — e.g. CPU ≥ 95% (critical) creates one alert; repeats inside the cooldown window increment `occurrence_count` instead of duplicating; in-app + external notifications fire per channel settings.
+6. **Offline detection** — background loop marks servers with no metrics for `SERVER_OFFLINE_THRESHOLD_SECONDS` offline, raising a critical `connectivity` alert and notifications.
+7. **Recovery** — first successful metric ingest after an offline state emits a recovery notification and restores health.
+8. **Alert lifecycle** — acknowledge / resolve / reopen via the alerts API; dashboard and server detail views update live over WebSocket.
+
+## Notifications
+
+### Multi-tenant by design
+
+- Provider **infrastructure credentials** (SMTP password, WhatsApp phone-number ID + access token, Telegram bot token) live **only** in platform environment configuration. They are never hard-coded, never stored on user documents, never returned by any API, and are redacted from logs and error messages.
+- Clients configure **only their own delivery destination** in **Settings**: email address, WhatsApp number (E.164), or Telegram chat (via one-time connection token — the bot maps `/start <token>` to the user's chat through a webhook).
+- Channel documents store only safe metadata (`chat_id`, `telegram_username`); secret-looking keys are stripped before persisting.
+
+### Per-channel settings
+
+| Setting | Values | Effect |
+|---|---|---|
+| `min_severity` | info, warning, high, critical | Only deliver this severity or higher |
+| `notification_types` | alert, recovery, offline, security | Only deliver these event types |
+| `cooldown_seconds` | ≥ 0 | Minimum seconds between sends on this channel |
+| `enabled` | bool | Master switch |
+
+### Test notifications
+
+`POST /api/notifications/settings/test` performs a **real** send through the selected provider. It validates in order: provider supported → platform enabled → platform configured → recipient valid → provider API result. Errors are specific and secret-free (e.g. "WhatsApp access token is invalid or expired").
+
+### Provider notes
+
+- **Email/Gmail (SMTP)** — set `SMTP_ENABLED=true` plus server/port/sender; for Gmail use an app password. Sends happen in a thread pool so the event loop is never blocked.
+- **WhatsApp (Meta Cloud API)** — set `WHATSAPP_ENABLED=true` plus phone-number ID and access token; recipients must be E.164 (e.g. `+923001234567`).
+- **Telegram** — set `TELEGRAM_ENABLED=true` and `TELEGRAM_BOT_TOKEN`; optionally `TELEGRAM_WEBHOOK_SECRET` to authenticate webhook calls and `TELEGRAM_BOT_USERNAME` to skip the `getMe` lookup for deep links.
 
 ## API Highlights
 
-### Authentication
-|| Endpoint | Description |
-||----------|-------------|
-|| POST /api/auth/register | Register user |
-|| POST /api/auth/login | Login |
-|| GET /api/auth/me | Get current user |
+| Area | Endpoints |
+|---|---|
+| Auth | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` |
+| Servers | `GET/POST /api/servers/`, `GET/PUT/DELETE /api/servers/{id}`, `PUT /api/servers/{id}/thresholds`, `PUT /api/servers/{id}/status` |
+| Enrollment | `POST /api/agents/{server_id}/enrollment`, `POST /api/agents/enroll`, `DELETE /api/agents/{server_id}/enrollment` |
+| Metrics | `POST /api/monitoring/metrics` (agent), `GET /api/servers/{id}/metrics`, `GET /api/servers/{id}/metrics/latest` |
+| Alerts | `GET /api/alerts`, `GET /api/alerts/pending`, `GET/PUT /api/alerts/{id}`, `PUT /api/alerts/{id}/acknowledge|resolve|reopen` |
+| Alert rules | `GET/POST /api/alert-rules/`, `GET/PUT/DELETE /api/alert-rules/{id}`, `POST /api/alert-rules/{id}/enable|disable` |
+| Incidents | `GET/POST /api/incidents/`, `GET/PUT/DELETE /api/incidents/{id}`, `POST /api/incidents/{id}/acknowledge|resolve|reopen`, `POST /api/incidents/{id}/alerts/{alert_id}` |
+| Notifications | `GET /api/notifications`, `PUT /api/notifications/{id}/read`, channels CRUD under `GET/POST /api/notifications/settings`, `PUT/DELETE .../settings/{id}`, `POST .../settings/test` |
+| Telegram connect | `POST .../settings/telegram/connect`, `GET .../settings/telegram/connect/status`, `DELETE .../settings/telegram/disconnect`, `POST .../settings/telegram/webhook` (public) |
+| Provider status | `GET /api/notifications/settings/providers/status` (booleans only — never credentials) |
+| Dashboard | `GET /api/dashboard/summary` |
+| WebSocket | `WS /api/ws/servers/{server_id}?token=<JWT>` |
+| Health | `GET /health` (DB + background service status) |
 
-### Servers
-|| Endpoint | Description |
-||----------|-------------|
-|| GET /api/servers | List servers (with filters) |
-|| POST /api/servers | Create server |
-|| GET /api/servers/{id} | Get server details |
-|| PUT /api/servers/{id} | Update server |
-|| DELETE /api/servers/{id} | Delete server |
-|| PUT /api/servers/{id}/thresholds | Update alert thresholds |
+## Environment Variables (backend/.env)
 
-### Agent Enrollment (NEW)
-|| Endpoint | Description |
-||----------|-------------|
-|| POST /api/agents/{server_id}/enrollment | Generate enrollment token |
-|| POST /api/agents/enroll | Enroll agent using token |
+| Variable | Description | Default |
+|---|---|---|
+| MONGODB_URI | MongoDB connection string | `mongodb://localhost:27017` |
+| DATABASE_NAME | Database name | `devops_monitor_pro` |
+| SECRET_KEY | JWT signing key — **set a strong random value in production** | dev placeholder |
+| ALGORITHM | JWT algorithm | `HS256` |
+| ACCESS_TOKEN_EXPIRE_MINUTES | Access-token lifetime | `30` |
+| REFRESH_TOKEN_EXPIRE_DAYS | Refresh-token lifetime | `7` |
+| ENVIRONMENT | `development` / `production` | `development` |
+| DEBUG | Verbose logging | `true` |
+| ALLOWED_ORIGINS | Extra CORS origins (JSON list) | `["*"]` |
+| FRONTEND_URL | CORS origin for the dashboard | `http://localhost:8501` |
+| BACKEND_URL | Base URL handed to agents during enrollment | `http://localhost:8000` |
+| METRIC_RETENTION_DAYS | Metric cleanup age | `30` |
+| ALERT_COOLDOWN_SECONDS | Alert dedup window | `300` |
+| SERVER_OFFLINE_THRESHOLD_SECONDS | Offline detection age | `120` |
+| HEALTH_CHECK_INTERVAL_SECONDS | Background loop interval | `60` |
+| SMTP_ENABLED | Enable email notifications | `false` |
+| SMTP_SERVER / SMTP_PORT / SMTP_USE_TLS | SMTP transport | `smtp.gmail.com` / `587` / `true` |
+| SMTP_USERNAME / SMTP_PASSWORD | Platform SMTP credentials | empty |
+| SMTP_FROM_EMAIL / SMTP_FROM_NAME | Sender identity | empty / `DevOps Monitor Pro` |
+| WHATSAPP_ENABLED | Enable WhatsApp notifications | `false` |
+| WHATSAPP_API_URL | Meta Graph API base | `https://graph.facebook.com/v17.0` |
+| WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN | Platform WhatsApp sender | empty |
+| WHATSAPP_TIMEOUT | Request timeout (s) | `30` |
+| TELEGRAM_ENABLED | Enable Telegram notifications | `false` |
+| TELEGRAM_BOT_TOKEN | Platform bot token | empty |
+| TELEGRAM_TIMEOUT / TELEGRAM_PARSE_MODE | Bot API options | `30` / `HTML` |
+| TELEGRAM_BOT_USERNAME | Optional static bot username (skips getMe) | empty |
+| TELEGRAM_WEBHOOK_SECRET | Shared secret for webhook verification | empty |
+| TELEGRAM_CONNECT_TOKEN_EXPIRE_MINUTES | One-time connect token lifetime | `15` |
 
-### Monitoring
-|| Endpoint | Description |
-||----------|-------------|
-|| POST /api/monitoring/metrics | Agent metric ingestion |
-|| GET /api/servers/{id}/metrics | Historical metrics (with time range) |
-
-### Alerts
-|| Endpoint | Description |
-||----------|-------------|
-|| GET /api/alerts | List alerts (with filters) |
-|| GET /api/alerts/pending | Pending alerts |
-|| PUT /api/alerts/{id}/acknowledge | Acknowledge alert |
-|| PUT /api/alerts/{id}/resolve | Resolve alert |
-|| PUT /api/alerts/{id}/reopen | Reopen alert |
-
-### Dashboard
-|| Endpoint | Description |
-||----------|-------------|
-|| GET /api/dashboard/summary | Dashboard statistics |
-|| WS /api/ws/servers/{id}?token=JWT | Real-time updates |
-
-### System
-|| Endpoint | Description |
-||----------|-------------|
-|| GET /health | Health check |
-
-## User Experience Flow
-
-1. **Register/Login** - Create account or login
-2. **Add Server** - Create a new server entry
-3. **Install Agent** - Use the Install Agent wizard
-4. **Enroll Agent** - Run the enrollment command on target machine
-5. **Automatic Monitoring** - Agent connects and starts sending metrics
-6. **View Dashboard** - See real-time server status and metrics
-7. **Monitor Alerts** - Receive and manage alerts automatically
-8. **Analyze Details** - Drill down into server-specific metrics
-
-## Security
-
-- bcrypt password hashing
-- JWT access + refresh tokens
-- Server ownership enforced on all protected routes
-- Agent authentication via `X-Agent-Token` header
-- Cryptographically secure enrollment tokens
-- Short-lived, single-use enrollment tokens
-- No secrets in source code — use `.env`
-- `agent_config.json` automatically added to .gitignore
+Agent env (`agent/.env` or enrollment): `API_URL`, `SERVER_ID`, `AGENT_TOKEN`, `INTERVAL_SECONDS`.
+Frontend env: `API_URL` (default `http://localhost:8000/api`).
 
 ## Testing
 
@@ -297,73 +252,60 @@ cd backend
 pytest -q
 ```
 
-Requires MongoDB running on localhost:27017.
+Requires MongoDB on `MONGODB_URI` (defaults to `localhost:27017`); tests use the `devops_monitor_pro_test` database and run against the real app via ASGI transport with lifespan initialisation. CI (`.github/workflows/tests.yml`) runs the same suite with a Mongo service container.
 
-### Test Coverage
+**Current result: 113 passed.**
 
-The implementation includes comprehensive testing for:
-- Agent enrollment generation and validation
-- Token expiration and single-use enforcement
-- Server ownership authorization
-- Metric ingestion and storage
-- Alert generation and lifecycle
-- API authentication and authorization
-- Real-time WebSocket connections
+Coverage includes: auth + refresh-token type enforcement, server CRUD and ownership, enrollment token lifecycle (expiry, single-use, wrong-owner), metric ingestion contract (server fields updated, history stored, unknown fields ignored, bad token → 401), alert lifecycle (dedup/cooldown/occurrences/ack/resolve/reopen/separate metric types), alert rules CRUD + ownership, incidents, dashboard summary shape, notification providers (enablement, missing-config errors, secret-free responses/logs, error mapping, failure isolation), channel ownership, cooldown/severity/type filtering, Telegram connect tokens (randomness, hashing, expiry, single-use, ownership) and webhook secret verification.
+
+### Live verification helpers (optional)
+
+With a server running on port 8021 (or edit `BASE` in each script):
+
+```bash
+cd backend
+uvicorn app.main:app --port 8021 &
+python _verify.py       # static checks (imports, query expressions, provider payload)
+python _smoke_test.py   # HTTP smoke test (20 checks)
+python _e2e_test.py     # full flow: login → server → enroll → metrics → alert → recovery (22 checks)
+```
 
 ## Deployment
 
-### Production Setup
+1. **Secrets** — generate a strong `SECRET_KEY` (32+ random chars); never commit `.env` or `agent_config.json` (both gitignored). Do not put real credentials in source or docs.
+2. **Database** — point `MONGODB_URI` at a production MongoDB (replica set recommended); do not expose Mongo publicly.
+3. **CORS** — set `ENVIRONMENT=production`, `FRONTEND_URL` to the dashboard origin, and restrict `ALLOWED_ORIGINS` (never `["*"]`).
+4. **Agent URL** — set `BACKEND_URL` to the externally reachable API base used in enrollment commands.
+5. **Notifications** — configure platform provider credentials via environment; clients then connect their own recipients in Settings.
+6. **Run** — `docker compose up -d`, or manually: `uvicorn app.main:app --host 0.0.0.0 --port 8000` behind a reverse proxy with TLS, `streamlit run app.py --server.port 8501`, and agents enrolled per machine.
+7. **Operations** — the background loop handles offline detection and metric retention; `GET /health` exposes DB + service status for load-balancer probes; logs are structured and secret-masked.
 
-1. **Environment Variables**: Set all required environment variables
-2. **MongoDB**: Configure production MongoDB connection
-3. **CORS**: Update `FRONTEND_URL` and `ALLOWED_ORIGINS`
-4. **Secrets**: Use strong `SECRET_KEY` for JWT signing
-5. **Agent URL**: Configure `BACKEND_URL` for agent enrollment
-6. **Monitoring**: Set appropriate retention and threshold values
+## Security Model
 
-### Docker Deployment
-
-```bash
-# Production docker-compose
-docker compose -f docker-compose.yml up -d
-```
-
-### Manual Deployment
-
-1. Deploy backend with `uvicorn app.main:app --host 0.0.0.0 --port 8000`
-2. Deploy frontend with `streamlit run app.py --server.port 8501`
-3. Deploy agents on target machines using enrollment system
-4. Configure reverse proxy (nginx) for production
-5. Set up SSL/TLS certificates
-6. Configure monitoring and alerting for the monitoring system itself
+- bcrypt (rounds 12, 72-byte truncation-safe) password hashing; password strength validated at registration
+- JWT access (30 min) + refresh (7 days) tokens; refresh endpoint rejects access tokens by `type` claim
+- Every user-scoped route filters by owner; admins see all; ownership violations return 404 (no enumeration)
+- Agent auth via `X-Agent-Token` bound to one server; tokens from server A cannot ingest for server B (401)
+- Enrollment + Telegram connect tokens: cryptographically random, SHA-256 hashed at rest, expiring, single-use
+- Provider credentials: environment-only, redacted from logs/errors, stripped from user documents, never in API responses
+- Telegram webhook verifies `X-Telegram-Bot-Api-Secret-Token` when configured (constant-time compare)
+- `agent_config.json`, `.env` gitignored
 
 ## Troubleshooting
 
-### Agent Issues
-- **Enrollment fails**: Check enrollment token validity and expiration
-- **Agent not connecting**: Verify `BACKEND_URL` and network connectivity
-- **Config file missing**: Re-run enrollment or check file permissions
-- **Metrics not appearing**: Check agent logs and server last_seen timestamp
-
-### Dashboard Issues
-- **Servers not appearing**: Ensure agent is successfully enrolled and running
-- **Metrics not updating**: Check WebSocket connection and agent interval
-- **Alerts not triggering**: Verify threshold configuration and metric values
-
-### Backend Issues
-- **Database connection**: Check MongoDB connection string and availability
-- **Authentication failures**: Verify JWT configuration and token expiration
-- **API errors**: Check logs for detailed error messages
+- **Enrollment fails** — token expired (20 min) or already used; generate a new one. Verify `BACKEND_URL` is reachable from the agent machine.
+- **Metrics rejected (401)** — agent token doesn't match the server (or monitoring disabled); re-enroll or re-issue.
+- **Server shows offline** — no metrics within `SERVER_OFFLINE_THRESHOLD_SECONDS`; check the agent process/logs.
+- **No notifications** — check `GET /api/notifications/settings/providers/status` (platform config), then the channel's `enabled`, `min_severity`, `notification_types` and `cooldown_seconds`.
+- **Email auth errors** — Gmail requires an app password; verify `SMTP_USERNAME`/`SMTP_PASSWORD`.
+- **Telegram deep link missing** — bot token invalid or `getMe` unreachable; set `TELEGRAM_BOT_USERNAME` to skip the lookup.
+- **WebSocket closes immediately (1008/403)** — the `token` query parameter must be a valid access JWT.
 
 ## Future Improvements
 
-- Email/Slack notifications
-- Hourly/daily metric rollups
-- Rate limiting middleware
+- Scheduled alert-rule evaluation engine (rules currently provide per-user threshold config; runtime evaluation follows server thresholds)
+- Hourly/daily metric rollups for long-range charts
+- Rate-limiting middleware (settings exist; enforcement pending)
 - Prometheus exporter
-- Advanced 3D server visualization
-- Mobile-responsive optimization
-- Custom dashboard layouts
+- Slack/webhook providers
 - Historical alert analytics
-- Performance baseline tracking
-- Predictive alerting based on trends

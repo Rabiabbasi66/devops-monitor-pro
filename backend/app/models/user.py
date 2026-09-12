@@ -12,8 +12,8 @@ class UserRole(str, enum.Enum):
 
 
 class User(Document):
-    email: EmailStr = Indexed(str, unique=True)
-    username: str = Indexed(str, unique=True)
+    email: EmailStr = Indexed(unique=True)
+    username: str = Indexed(unique=True)
     hashed_password: str
     full_name: Optional[str] = None
     role: UserRole = UserRole.USER

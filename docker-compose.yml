@@ -7,32 +7,65 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: devops_monitor_pro
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
+    env_file:
+      - ./backend/.env
     environment:
       MONGODB_URI: mongodb://mongodb:27017
       DATABASE_NAME: devops_monitor_pro
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
-      FRONTEND_URL: http://localhost:8501
+      # SECRET_KEY, SMTP_*, WHATSAPP_*, TELEGRAM_* all come from ./backend/.env
+      # via env_file. ENVIRONMENT defaults to production here; with a weak or
+      # missing SECRET_KEY the backend refuses to start (fail-fast guard).
+      ENVIRONMENT: ${ENVIRONMENT:-production}
       DEBUG: "false"
+      # Internal URL for the Streamlit dashboard (compose network)
+      FRONTEND_URL: http://frontend:8501
+      # Externally reachable URL handed to agents during enrollment.
+      # Override with BACKEND_URL in .env when agents run outside this host.
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     volumes:
       - ./backend:/app
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build: ./frontend
     ports:
       - "8501:8501"
     environment:
-      API_URL: http://localhost:8000/api
+      # Dashboard calls the API from the BROWSER (Streamlit runs server-side,
+      # but the API base must be reachable from where the user opens the UI)
+      API_URL: ${API_URL:-http://localhost:8000/api}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
       - ./frontend:/app
+    restart: unless-stopped
 
   agent:
     build: ./agent
@@ -42,9 +75,11 @@ services:
       AGENT_TOKEN: ${AGENT_TOKEN:-}
       INTERVAL_SECONDS: 30
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     profiles:
       - agent
+    restart: unless-stopped
 
 volumes:
   mongodb_data:

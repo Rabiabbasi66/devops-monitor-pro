@@ -38,6 +38,9 @@ class Server(Document):
     health_status: HealthStatus = HealthStatus.UNKNOWN
     hostname: Optional[str] = None
     operating_system: Optional[str] = None
+    os_version: Optional[str] = None
+    architecture: Optional[str] = None
+    platform: Optional[str] = None
     cpu_usage: float = Field(default=0.0, ge=0, le=100)
     memory_usage: float = Field(default=0.0, ge=0, le=100)
     disk_usage: float = Field(default=0.0, ge=0, le=100)
@@ -45,7 +48,14 @@ class Server(Document):
     response_time_ms: Optional[float] = None
     last_checked: datetime = Field(default_factory=datetime.utcnow)
     last_seen: Optional[datetime] = None
+    agent_version: Optional[str] = None
+    agent_status: str = "unknown"  # enrolled, active, stale, offline, revoked
     tags: List[str] = Field(default_factory=list)
+    environment: Optional[str] = None  # Production, Staging, Development, Testing
+    description: Optional[str] = None
+    location: Optional[str] = None
+    owner: Optional[str] = None
+    monitoring_enabled: bool = True
     user_id: Indexed(str)
     agent_token: Optional[str] = None
     thresholds: ServerThreshold = Field(default_factory=ServerThreshold)
@@ -61,4 +71,6 @@ class Server(Document):
             [("status", 1)],
             [("health_status", 1)],
             [("agent_token", 1)],
+            [("environment", 1)],
+            [("tags", 1)],
         ]

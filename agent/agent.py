@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("monitoring-agent")
 
 CONFIG_FILE = "agent_config.json"
+AGENT_VERSION = "2.0.0"
 
 
 def load_config():
@@ -70,30 +71,60 @@ def enroll_agent(enrollment_token):
 
 
 def collect_all() -> dict:
+    """Collect all metrics from all collectors."""
+    cpu = collect_cpu()
     memory = collect_memory()
     disk = collect_disk()
     network = collect_network()
     system = collect_system()
+    processes = collect_processes()
+    
     return {
         "server_id": settings.SERVER_ID,
-        "cpu_usage": collect_cpu(),
+        "agent_version": AGENT_VERSION,
+        **cpu,
         **memory,
         **disk,
-        "network_sent": network["network_sent"],
-        "network_received": network["network_received"],
+        **network,
         **system,
-        "process_count": collect_processes(),
+        "processes": processes,
     }
 
 
 def send_metrics(payload: dict, api_url, agent_token) -> bool:
+    """Send metrics to backend with retry logic."""
     url = f"{api_url.rstrip('/')}/monitoring/metrics"
     headers = {"X-Agent-Token": agent_token, "Content-Type": "application/json"}
-    response = requests.post(url, json=payload, headers=headers, timeout=15)
-    if response.status_code == 200:
-        logger.info("Metrics sent successfully")
-        return True
-    logger.error("Failed to send metrics: %s %s", response.status_code, response.text)
+    
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            if response.status_code == 200:
+                logger.info("Metrics sent successfully")
+                return True
+            elif response.status_code == 401:
+                logger.error("Invalid agent token - authentication failed")
+                return False
+            else:
+                logger.warning(f"Failed to send metrics (attempt {attempt + 1}/{max_retries}): HTTP {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout sending metrics (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"Connection error sending metrics (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        except Exception as e:
+            logger.error(f"Unexpected error sending metrics: {e}")
+            return False
+    
+    logger.error("Failed to send metrics after %d retries", max_retries)
     return False
 
 

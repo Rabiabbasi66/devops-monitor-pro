@@ -1,7 +1,7 @@
 import streamlit as st
 
 from api.client import APIClient
-from pages import alerts, dashboard, notifications, server_detail, servers, settings
+from pages import alerts, dashboard, incidents, notifications, server_detail, servers, settings
 
 
 def login_page(api: APIClient):
@@ -164,6 +164,7 @@ def main():
         "user": None,
         "page": "Dashboard",
         "selected_server": None,
+        "show_create_incident": False,
     }.items():
         if key not in st.session_state:
             st.session_state[key] = default
@@ -191,8 +192,9 @@ def main():
                 "Servers": "🖥️",
                 "Server Detail": "📈",
                 "Alerts": "🔔",
+                "Incidents": "🚨",
                 "Notifications": "📬",
-                "Settings": "⚙️"
+                "Settings": "⚙️",
             }
             
             selected_page = st.radio(
@@ -229,6 +231,8 @@ def main():
         server_detail.render(api)
     elif page == "Alerts":
         alerts.render(api)
+    elif page == "Incidents":
+        incidents.render(api)
     elif page == "Notifications":
         notifications.render(api)
     elif page == "Settings":

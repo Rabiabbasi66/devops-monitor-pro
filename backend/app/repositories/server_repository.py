@@ -16,6 +16,9 @@ class ServerRepository:
             server_type=data.server_type,
             tags=data.tags,
             user_id=user_id,
+            # Permanent agent token is issued at creation so the install wizard
+            # can hand it to the agent immediately. Enrollment is still
+            # supported for token rotation and re-configuration.
             agent_token=generate_agent_token(),
         )
         await server.insert()
@@ -46,7 +49,10 @@ class ServerRepository:
         return await Server.find_one(Server.id == oid, Server.user_id == user_id)
 
     async def get_by_agent_token(self, token: str) -> Optional[Server]:
-        return await Server.find_one(Server.agent_token == token)
+        server = await Server.find_one(Server.agent_token == token)
+        if server and not server.monitoring_enabled:
+            return None
+        return server
 
     async def get_by_ids(self, server_ids: List[str]) -> List[Server]:
         if not server_ids:

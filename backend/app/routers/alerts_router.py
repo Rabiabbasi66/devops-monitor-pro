@@ -22,8 +22,14 @@ def _alert_response(alert) -> AlertResponse:
         current_value=alert.current_value,
         threshold=alert.threshold,
         resolved=alert.resolved,
+        occurrence_count=getattr(alert, "occurrence_count", 1),
         acknowledged_at=alert.acknowledged_at,
+        acknowledged_by=getattr(alert, "acknowledged_by", None),
         resolved_at=alert.resolved_at,
+        resolved_by=getattr(alert, "resolved_by", None),
+        duration_seconds=getattr(alert, "duration_seconds", None),
+        first_occurred_at=getattr(alert, "first_occurred_at", None),
+        last_occurred_at=getattr(alert, "last_occurred_at", None),
         created_at=alert.created_at,
     )
 

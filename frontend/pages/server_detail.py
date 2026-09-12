@@ -127,7 +127,6 @@ def render(api: APIClient):
         "Select Time Range",
         ["1 Hour", "6 Hours", "12 Hours", "24 Hours", "48 Hours", "72 Hours"],
         index=3,
-        horizontal=True
     )
     
     hours_map = {
@@ -259,18 +258,23 @@ def render(api: APIClient):
             row=3, col=1
         )
     
-    # Process count (if available)
-    if "process_count" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df["timestamp"],
-                y=df["process_count"],
-                name="Process Count",
-                mode='lines',
-                line=dict(color='#f97316', width=2)
-            ),
-            row=3, col=2
+    # Process count — extract from processes.total if available, else skip
+    # The 'process_count' field no longer exists; data is in processes.total
+    if "processes" in df.columns:
+        process_totals = df["processes"].apply(
+            lambda p: p.get("total", None) if isinstance(p, dict) else None
         )
+        if process_totals.notna().any():
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=process_totals,
+                    name="Process Count",
+                    mode='lines',
+                    line=dict(color='#f97316', width=2)
+                ),
+                row=3, col=2
+            )
     
     # Update layout
     fig.update_layout(
@@ -418,6 +422,78 @@ def render(api: APIClient):
                     <strong>Time:</strong> {created_at}
                 </div>
                 """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # =========================================================
+    # PROCESSES SECTION
+    # =========================================================
+    
+    st.markdown("### 🔄 Top Processes")
+    
+    # Get latest metrics to show processes
+    with st.spinner("Loading process data..."):
+        latest_metrics_resp = api.get(f"/servers/{server_id}/metrics", hours=1, limit=1)
+    
+    if latest_metrics_resp.status_code == 200:
+        latest_items = latest_metrics_resp.json().get("items", [])
+        if latest_items:
+            latest_metric = latest_items[0]
+            processes = latest_metric.get("processes", {})
+            
+            if processes:
+                st.markdown("#### Top CPU Processes")
+                top_cpu = processes.get("top_cpu", [])
+                if top_cpu:
+                    cpu_df = pd.DataFrame(top_cpu)
+                    # Select and rename only the columns we know exist
+                    display_cols = [c for c in ["pid", "name", "cpu_percent", "memory_percent", "status"] if c in cpu_df.columns]
+                    cpu_df = cpu_df[display_cols]
+                    cpu_df.columns = [c.replace("_", " ").title() for c in display_cols]
+                    st.dataframe(cpu_df, use_container_width=True, height=200)
+                else:
+                    st.info("No CPU process data available")
+
+                st.markdown("#### Top Memory Processes")
+                top_memory = processes.get("top_memory", [])
+                if top_memory:
+                    mem_df = pd.DataFrame(top_memory)
+                    display_cols = [c for c in ["pid", "name", "cpu_percent", "memory_percent", "status"] if c in mem_df.columns]
+                    mem_df = mem_df[display_cols]
+                    mem_df.columns = [c.replace("_", " ").title() for c in display_cols]
+                    st.dataframe(mem_df, use_container_width=True, height=200)
+                else:
+                    st.info("No memory process data available")
+            else:
+                st.info("Process monitoring not available in current metrics")
+    
+    st.divider()
+
+    # =========================================================
+    # ADVANCED SYSTEM INFO
+    # =========================================================
+    
+    st.markdown("### 🔧 Advanced System Information")
+    
+    sys_col1, sys_col2, sys_col3 = st.columns(3)
+    
+    with sys_col1:
+        st.info(f"**Architecture:** {server.get('architecture', 'N/A')}")
+        st.info(f"**Platform:** {server.get('platform', 'N/A')}")
+    
+    with sys_col2:
+        st.info(f"**Agent Status:** {server.get('agent_status', 'N/A')}")
+        st.info(f"**Agent Version:** {server.get('agent_version', 'N/A')}")
+    
+    with sys_col3:
+        st.info(f"**OS Version:** {server.get('os_version', 'N/A')}")
+        tags = server.get('tags', [])
+        if tags:
+            st.info(f"**Tags:** {', '.join(tags)}")
+        else:
+            st.info("**Tags:** None")
+
+    st.divider()
 
     # Back button
     if st.button("← Back to Servers", use_container_width=True):

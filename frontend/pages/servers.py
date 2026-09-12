@@ -6,7 +6,7 @@ from api.client import APIClient
 def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
     """Show the Install Agent wizard for a server."""
     st.markdown("### 📥 Install Monitoring Agent")
-    
+
     # Step 1: OS Selection
     st.markdown("#### Step 1: Choose Operating System")
     os_choice = st.selectbox(
@@ -14,7 +14,7 @@ def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
         ["Windows", "Linux", "macOS"],
         key=f"os_{server_id}"
     )
-    
+
     # Step 2: Generate enrollment token
     st.markdown("#### Step 2: Generate Enrollment Token")
     if st.button("Generate Enrollment Token", key=f"generate_{server_id}"):
@@ -27,49 +27,51 @@ def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
                 st.rerun()
             else:
                 st.error(f"Failed to generate enrollment token: {response.text}")
-    
+
     # Step 3: Show installation instructions
     if f"enrollment_{server_id}" in st.session_state:
         enrollment_data = st.session_state[f"enrollment_{server_id}"]
         enrollment_token = enrollment_data["enrollment_token"]
         api_url = enrollment_data["api_url"]
-        
+        expires_at = enrollment_data.get("expires_at", "Unknown")
+
         st.markdown("#### Step 3: Installation Instructions")
-        
+        st.warning(f"⚠️ This enrollment token expires at: {expires_at}")
+
         if os_choice == "Windows":
             st.info("""
             **Windows Installation:**
-            
+
             1. Download the agent files to your target server
             2. Open PowerShell in the agent directory
             3. Run the following command:
             """)
             st.code(f'python agent.py --enroll "{enrollment_token}"', language="powershell")
-            
+
         elif os_choice == "Linux":
             st.info("""
             **Linux Installation:**
-            
+
             1. Download the agent files to your target server
             2. Install Python dependencies: `pip install -r requirements.txt`
             3. Run the following command:
             """)
             st.code(f'python3 agent.py --enroll "{enrollment_token}"', language="bash")
-            
+
         else:  # macOS
             st.info("""
             **macOS Installation:**
-            
+
             1. Download the agent files to your target server
             2. Install Python dependencies: `pip install -r requirements.txt`
             3. Run the following command:
             """)
             st.code(f'python3 agent.py --enroll "{enrollment_token}"', language="bash")
-        
+
         # Step 4: Waiting for agent connection
         st.markdown("#### Step 4: Waiting for Agent Connection")
         st.info("Run the command above on your target server. The agent will automatically connect and start monitoring.")
-        
+
         # Auto-refresh to check for agent connection
         if st.button("Check Agent Status", key=f"check_{server_id}"):
             response = api.get(f"/servers/{server_id}")
@@ -172,7 +174,7 @@ def render(api: APIClient):
                             )
 
                         st.success(
-                            "Now refresh the Servers page and install the agent."
+                            "Now install the agent using the Install Agent button below."
                         )
 
                         st.rerun()
