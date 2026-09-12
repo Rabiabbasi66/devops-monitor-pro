@@ -1,9 +1,10 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 venv/
 env/
 .venv/
+.venv-build/
 *.egg-info/
 
 # IDE
@@ -16,6 +17,11 @@ env/
 
 # Agent configuration
 agent_config.json
+
+# PyInstaller build artifacts (agent executable is distributed via GitHub
+# Releases, never committed to Git)
+build/
+dist/
 
 # Database
 *.db

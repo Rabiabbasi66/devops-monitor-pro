@@ -1,165 +1,91 @@
-﻿import argparse
-import json
+"""DevOps Monitor Pro agent — command-line entrypoint.
+
+Development / server mode (unchanged behaviour):
+
+    python agent.py                # run monitoring with existing config/env
+    python agent.py --enroll "TOKEN"
+
+Client mode (packaged Windows agent):
+
+    DevOpsMonitorAgent.exe --enroll "TOKEN"     # enroll + start monitoring
+    DevOpsMonitorAgent.exe --tray               # start monitoring silently
+    DevOpsMonitorAgent.exe                      # opens the enrollment GUI window
+
+After enrollment, credentials are stored locally (see ``credentials_file.py``);
+the agent never needs SERVER_ID/AGENT_TOKEN env vars or a .env file.
+"""
+
+import argparse
 import logging
 import os
+import sys
 import time
 
-import requests
-
 from config import settings
-from collectors import (
-    collect_cpu,
-    collect_disk,
-    collect_memory,
-    collect_network,
-    collect_processes,
-    collect_system,
+from runtime import (
+    DEFAULT_INTERVAL_SECONDS,
+    collect_all,
+    enroll_agent,
+    send_metrics,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("monitoring-agent")
 
-CONFIG_FILE = "agent_config.json"
-AGENT_VERSION = "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Mode detection
+# ---------------------------------------------------------------------------
+
+
+def _is_frozen() -> bool:
+    return getattr(sys, "frozen", False)
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _resolve_runtime_mode(args) -> str:
+    """Decide the runtime mode from CLI args and packaging state.
+
+    Modes: ``gui`` (tkinter enrollment window), ``tray`` (headless background
+    monitoring), ``console`` (classic CLI loop for development/servers).
+    """
+    if args.gui:
+        return "gui"
+    if args.tray:
+        return "tray"
+    if _is_frozen() and _is_windows() and not args.enroll and not args.console:
+        # Default for the packaged Windows agent: launch the client GUI.
+        return "gui"
+    return "console"
+
+
+# ---------------------------------------------------------------------------
+# Enrollment helpers (kept for backward compatibility with existing scripts)
+# ---------------------------------------------------------------------------
 
 
 def load_config():
-    """Load agent configuration from file if exists."""
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                logger.info("Loaded configuration from agent_config.json")
-                return config
-        except Exception as e:
-            logger.warning(f"Failed to load config file: {e}")
-    return None
+    """Load stored agent configuration from the credential file (or None)."""
+    from credentials_file import load_credentials
+
+    return load_credentials()
 
 
 def save_config(config):
-    """Save agent configuration to file."""
-    try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
-        logger.info("Configuration saved to agent_config.json")
-    except Exception as e:
-        logger.error(f"Failed to save config file: {e}")
+    """Persist agent credentials to the secure local credential file."""
+    from credentials_file import save_credentials
+
+    save_credentials(config)
 
 
-def enroll_agent(enrollment_token):
-    """Enroll agent using enrollment token."""
-    api_url = settings.API_URL.rstrip('/')
-    url = f"{api_url}/agents/enroll"
-    
-    logger.info("Enrolling agent...")
-    response = requests.post(url, json={"enrollment_token": enrollment_token}, timeout=30)
-    
-    if response.status_code == 200:
-        data = response.json()
-        config = {
-            "server_id": data["server_id"],
-            "agent_token": data["agent_token"],
-            "api_url": data["api_url"],
-            "interval_seconds": data.get("interval_seconds", 30)
-        }
-        save_config(config)
-        logger.info("Agent enrolled successfully")
-        return config
-    else:
-        logger.error(f"Enrollment failed: HTTP {response.status_code}")
-        raise SystemExit("Agent enrollment failed")
+# ---------------------------------------------------------------------------
+# Console monitoring loop (development / Docker / servers)
+# ---------------------------------------------------------------------------
 
 
-def collect_all() -> dict:
-    """Collect all metrics from all collectors."""
-    cpu = collect_cpu()
-    memory = collect_memory()
-    disk = collect_disk()
-    network = collect_network()
-    system = collect_system()
-    processes = collect_processes()
-    
-    return {
-        "server_id": settings.SERVER_ID,
-        "agent_version": AGENT_VERSION,
-        **cpu,
-        **memory,
-        **disk,
-        **network,
-        **system,
-        "processes": processes,
-    }
-
-
-def send_metrics(payload: dict, api_url, agent_token) -> bool:
-    """Send metrics to backend with retry logic."""
-    url = f"{api_url.rstrip('/')}/monitoring/metrics"
-    headers = {"X-Agent-Token": agent_token, "Content-Type": "application/json"}
-    
-    max_retries = 3
-    retry_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=15)
-            if response.status_code == 200:
-                logger.info("Metrics sent successfully")
-                return True
-            elif response.status_code == 401:
-                logger.error("Invalid agent token - authentication failed")
-                return False
-            else:
-                logger.warning(f"Failed to send metrics (attempt {attempt + 1}/{max_retries}): HTTP {response.status_code}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-        except requests.exceptions.Timeout:
-            logger.warning(f"Timeout sending metrics (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-        except requests.exceptions.ConnectionError:
-            logger.warning(f"Connection error sending metrics (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-        except Exception as e:
-            logger.error(f"Unexpected error sending metrics: {e}")
-            return False
-    
-    logger.error("Failed to send metrics after %d retries", max_retries)
-    return False
-
-
-def main():
-    parser = argparse.ArgumentParser(description="DevOps Monitor Pro Agent")
-    parser.add_argument("--enroll", help="Enrollment token for automatic agent setup")
-    args = parser.parse_args()
-    
-    # Handle enrollment
-    if args.enroll:
-        config = enroll_agent(args.enroll)
-        # Use enrolled config
-        server_id = config["server_id"]
-        agent_token = config["agent_token"]
-        api_url = config["api_url"]
-        interval = config.get("interval_seconds", 30)
-    else:
-        # Try to load from config file first
-        config = load_config()
-        if config:
-            server_id = config["server_id"]
-            agent_token = config["agent_token"]
-            api_url = config["api_url"]
-            interval = config.get("interval_seconds", 30)
-        else:
-            # Fall back to environment variables
-            if not settings.SERVER_ID or not settings.AGENT_TOKEN:
-                raise SystemExit(
-                    "SERVER_ID and AGENT_TOKEN must be set in environment, .env, or use --enroll token"
-                )
-            server_id = settings.SERVER_ID
-            agent_token = settings.AGENT_TOKEN
-            api_url = settings.API_URL
-            interval = settings.INTERVAL_SECONDS
-    
+def run_console_loop(server_id: str, agent_token: str, api_url: str, interval: int) -> None:
     logger.info("Starting monitoring agent for server %s", server_id)
     while True:
         try:
@@ -171,6 +97,98 @@ def main():
         time.sleep(interval)
 
 
-if __name__ == "__main__":
-    main()
+def run_console_mode(args) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
+    if args.enroll:
+        config = enroll_agent(args.enroll)
+        server_id = config["server_id"]
+        agent_token = config["agent_token"]
+        api_url = config["api_url"]
+        interval = config.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
+    else:
+        config = load_config()
+        if config:
+            server_id = config["server_id"]
+            agent_token = config["agent_token"]
+            api_url = config["api_url"]
+            interval = config.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
+        elif settings.SERVER_ID and settings.AGENT_TOKEN:
+            # Environment / .env based configuration (Docker & CI workflows).
+            server_id = settings.SERVER_ID
+            agent_token = settings.AGENT_TOKEN
+            api_url = settings.API_URL
+            interval = settings.INTERVAL_SECONDS
+        else:
+            raise SystemExit(
+                "Not enrolled yet. Provide an enrollment code:\n"
+                '  DevOpsMonitorAgent.exe --enroll "TOKEN"\n'
+                "or set SERVER_ID and AGENT_TOKEN in agent/.env."
+            )
+
+    run_console_loop(server_id, agent_token, api_url, interval)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="DevOps Monitor Pro Agent")
+    parser.add_argument("--enroll", help="Enrollment token for automatic agent setup")
+    parser.add_argument("--gui", action="store_true", help="Open the enrollment GUI window")
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run monitoring in the background without a window",
+    )
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Force the classic console mode (development/servers)",
+    )
+    args = parser.parse_args()
+
+    mode = _resolve_runtime_mode(args)
+
+    if mode == "gui":
+        import gui
+
+        return gui.main()
+
+    if mode == "tray":
+        return _run_tray()
+
+    return run_console_mode(args)
+
+
+def _run_tray() -> int:
+    """Headless background monitoring (started from a shortcut/autostart)."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    from credentials_file import load_credentials
+
+    creds = load_credentials()
+    if not creds:
+        logger.error("Agent is not enrolled yet — run DevOpsMonitorAgent.exe first.")
+        return 1
+
+    from runtime import MonitoringLoop
+
+    loop = MonitoringLoop(
+        server_id=creds["server_id"],
+        agent_token=creds["agent_token"],
+        api_url=creds.get("api_url", settings.API_URL),
+        interval=int(creds.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)),
+    )
+    loop.start()
+    try:
+        loop.join()
+    except KeyboardInterrupt:
+        loop.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

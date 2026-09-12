@@ -1,91 +1,135 @@
 import streamlit as st
+import os
 import time
 from api.client import APIClient
 
+# Where clients download the packaged Windows agent (built with
+# agent/build_windows.ps1 and published via GitHub Releases).
+# Override with the AGENT_DOWNLOAD_URL environment variable if the release
+# location changes. Never points at developer source code.
+DEFAULT_AGENT_DOWNLOAD_URL = (
+    "https://github.com/Rabiabbasi66/devops-monitor-pro/releases/latest"
+)
+
 
 def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
-    """Show the Install Agent wizard for a server."""
+    """Show the client-facing Install Agent wizard for a server."""
     st.markdown("### 📥 Install Monitoring Agent")
 
     # Step 1: OS Selection
     st.markdown("#### Step 1: Choose Operating System")
     os_choice = st.selectbox(
-        "Select your server's operating system:",
+        "Select the operating system of the computer you want to monitor:",
         ["Windows", "Linux", "macOS"],
-        key=f"os_{server_id}"
+        key=f"os_{server_id}",
     )
 
-    # Step 2: Generate enrollment token
-    st.markdown("#### Step 2: Generate Enrollment Token")
-    if st.button("Generate Enrollment Token", key=f"generate_{server_id}"):
-        with st.spinner("Generating enrollment token..."):
+    # Step 2: Generate enrollment token (unchanged backend endpoint)
+    st.markdown("#### Step 2: Generate Enrollment")
+    if st.button("Generate Enrollment Code", key=f"generate_{server_id}"):
+        with st.spinner("Generating enrollment code..."):
             response = api.post(f"/agents/{server_id}/enrollment")
             if response.status_code == 200:
                 enrollment_data = response.json()
                 st.session_state[f"enrollment_{server_id}"] = enrollment_data
-                st.success("Enrollment token generated successfully!")
                 st.rerun()
             else:
-                st.error(f"Failed to generate enrollment token: {response.text}")
+                st.error(f"Failed to generate enrollment code: {response.text}")
 
-    # Step 3: Show installation instructions
+    # Step 3: Download agent + client instructions
     if f"enrollment_{server_id}" in st.session_state:
         enrollment_data = st.session_state[f"enrollment_{server_id}"]
         enrollment_token = enrollment_data["enrollment_token"]
-        api_url = enrollment_data["api_url"]
         expires_at = enrollment_data.get("expires_at", "Unknown")
 
-        st.markdown("#### Step 3: Installation Instructions")
-        st.warning(f"⚠️ This enrollment token expires at: {expires_at}")
+        st.markdown("#### Step 3: Download Agent")
+        st.warning(f"⏳ This enrollment code expires at **{expires_at}** and can be used once.")
 
         if os_choice == "Windows":
-            st.info("""
-            **Windows Installation:**
+            download_url = os.getenv("AGENT_DOWNLOAD_URL", DEFAULT_AGENT_DOWNLOAD_URL)
+            st.info(
+                "**Follow these 4 steps:**\n\n"
+                "1. **Download the Windows Agent** below.\n"
+                "2. **Run the agent** on the computer/server you want to monitor "
+                "(double-click `DevOpsMonitorAgent.exe`).\n"
+                "3. **Enter the one-time enrollment code** in the agent window.\n"
+                "4. **Click Connect** — the agent registers itself and starts "
+                "monitoring automatically."
+            )
 
-            1. Download the agent files to your target server
-            2. Open PowerShell in the agent directory
-            3. Run the following command:
-            """)
-            st.code(f'python agent.py --enroll "{enrollment_token}"', language="powershell")
+            # One-time code display with copy-friendly code block
+            st.markdown("**Your one-time enrollment code:**")
+            st.code(enrollment_token, language="text")
 
-        elif os_choice == "Linux":
-            st.info("""
-            **Linux Installation:**
+            st.link_button(
+                "⬇️ Download Windows Agent",
+                download_url,
+                use_container_width=True,
+            )
+            st.caption(
+                "The agent installer includes everything it needs — no Python "
+                "or technical setup required. After connecting, leave the agent "
+                "window open (or start it with `--tray`) to keep monitoring."
+            )
+        else:
+            # Linux/macOS: no packaged GUI agent yet; keep it short and honest.
+            st.info(
+                "A packaged desktop agent for **" + os_choice + "** is coming soon.\n\n"
+                "In the meantime, use the advanced command-line option below to "
+                "monitor a Linux/macOS machine."
+            )
 
-            1. Download the agent files to your target server
-            2. Install Python dependencies: `pip install -r requirements.txt`
-            3. Run the following command:
-            """)
-            st.code(f'python3 agent.py --enroll "{enrollment_token}"', language="bash")
-
-        else:  # macOS
-            st.info("""
-            **macOS Installation:**
-
-            1. Download the agent files to your target server
-            2. Install Python dependencies: `pip install -r requirements.txt`
-            3. Run the following command:
-            """)
-            st.code(f'python3 agent.py --enroll "{enrollment_token}"', language="bash")
+        # ------------------------------------------------------------
+        # Advanced / developer option (hidden by default)
+        # ------------------------------------------------------------
+        with st.expander("⚙️ Advanced: command-line installation (developers)"):
+            if os_choice == "Windows":
+                st.markdown(
+                    "Run the packaged agent from a terminal (same enrollment code):"
+                )
+                st.code(f'DevOpsMonitorAgent.exe --enroll "{enrollment_token}"', language="powershell")
+            else:
+                st.markdown(
+                    "On the target machine (Python 3.10+ required), from the agent "
+                    "source directory:"
+                )
+                lang = "bash"
+                st.code(f'python3 agent.py --enroll "{enrollment_token}"', language=lang)
+            st.caption(
+                "The agent exchanges this code at `POST /api/agents/enroll`, stores "
+                "its credentials locally and starts sending metrics immediately."
+            )
 
         # Step 4: Waiting for agent connection
-        st.markdown("#### Step 4: Waiting for Agent Connection")
-        st.info("Run the command above on your target server. The agent will automatically connect and start monitoring.")
+        st.markdown("#### Step 4: Wait for Connection")
+        st.info(
+            "After you click **Connect** in the agent, this server switches to "
+            "**Online** and live metrics appear on the dashboard automatically."
+        )
 
-        # Auto-refresh to check for agent connection
-        if st.button("Check Agent Status", key=f"check_{server_id}"):
-            response = api.get(f"/servers/{server_id}")
-            if response.status_code == 200:
-                server_data = response.json()
-                if server_data.get("last_seen"):
-                    st.success("✅ Agent Connected! The server is now being monitored.")
-                    st.balloons()
-                    del st.session_state[f"enrollment_{server_id}"]
-                    st.rerun()
+        # Manual refresh to check for agent connection
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔄 Check Agent Status", key=f"check_{server_id}"):
+                response = api.get(f"/servers/{server_id}")
+                if response.status_code == 200:
+                    server_data = response.json()
+                    if server_data.get("last_seen"):
+                        st.success("✅ Agent Connected! The server is now being monitored.")
+                        st.balloons()
+                        del st.session_state[f"enrollment_{server_id}"]
+                        st.rerun()
+                    else:
+                        st.warning(
+                            "⏳ Agent not yet connected. Complete steps 1–4 above on "
+                            "the target machine."
+                        )
                 else:
-                    st.warning("⏳ Agent not yet connected. Please run the enrollment command on the target server.")
-            else:
-                st.error("Failed to check server status")
+                    st.error("Failed to check server status")
+        with col_b:
+            if st.button("🚫 Discard Code", key=f"discard_{server_id}"):
+                del st.session_state[f"enrollment_{server_id}"]
+                st.rerun()
 
 
 def render(api: APIClient):
