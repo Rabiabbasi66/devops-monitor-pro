@@ -80,9 +80,13 @@ def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
             )
 
         # ------------------------------------------------------------
-        # Advanced / developer option (hidden by default)
+        # Advanced / developer option (command-line installation)
+        # NOTE: rendered as a bordered container, NOT an st.expander —
+        # this section already sits inside the "Install Agent Wizard"
+        # expander and Streamlit does not allow nested expanders.
         # ------------------------------------------------------------
-        with st.expander("⚙️ Advanced: command-line installation (developers)"):
+        with st.container(border=True):
+            st.markdown("##### ⚙️ Advanced: command-line installation (developers)")
             if os_choice == "Windows":
                 st.markdown(
                     "Run the packaged agent from a terminal (same enrollment code):"
