@@ -23,6 +23,9 @@ agent_config.json
 build/
 dist/
 
+# Generated at build time (bakes the production API URL into the bundle)
+agent/_runtime_hook.py
+
 # Database
 *.db
 *.sqlite3

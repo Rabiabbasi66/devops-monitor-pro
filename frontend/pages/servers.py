@@ -67,9 +67,10 @@ def show_install_agent_wizard(api: APIClient, server_id: str, server_name: str):
                 use_container_width=True,
             )
             st.caption(
-                "The agent installer includes everything it needs — no Python "
-                "or technical setup required. After connecting, leave the agent "
-                "window open (or start it with `--tray`) to keep monitoring."
+                "The Windows installer includes everything it needs — no Python "
+                "or technical setup required. It installs the agent, connects it "
+                "with your enrollment code and can start monitoring automatically "
+                "after every restart."
             )
         else:
             # Linux/macOS: no packaged GUI agent yet; keep it short and honest.

@@ -1,0 +1,60 @@
+name: Build Agent Release
+
+# Builds the Windows client installer whenever a release is published or a
+# v* tag is pushed. DevOpsMonitorAgent-Setup.exe is attached to the GitHub
+# Release (clients download it there) and also uploaded as a CI artifact for
+# testing before publishing.
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-agent:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Inno Setup 6
+        run: choco install innosetup -y --no-progress
+
+      - name: Build portable agent + installer
+        shell: pwsh
+        run: .\agent\build_windows.ps1
+
+      - name: Verify build outputs
+        shell: pwsh
+        run: |
+          $agent = "agent\dist\DevOpsMonitorAgent.exe"
+          $setup = "agent\dist\DevOpsMonitorAgent-Setup.exe"
+          if (-not (Test-Path $agent)) { throw "Missing $agent" }
+          if (-not (Test-Path $setup)) { throw "Missing $setup (Inno Setup build failed?)" }
+          Get-Item $agent, $setup | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload CI artifact (for testing before publishing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DevOpsMonitorAgent-Setup
+          path: agent/dist/DevOpsMonitorAgent-Setup.exe
+          if-no-files-found: error
+
+      - name: Attach installer to the GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent/dist/DevOpsMonitorAgent-Setup.exe
+          fail_on_unmatched_files: true

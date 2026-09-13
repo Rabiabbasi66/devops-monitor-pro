@@ -121,19 +121,56 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-### Agent Enrollment (recommended)
+## Windows Client Installer
 
-The agent never needs a manually configured token:
+Clients do **not** need Python, VS Code, Git or any configuration files. The dashboard's **Servers → Install Agent** wizard points them at the official Windows installer:
 
-1. Log in to the dashboard → **Servers** → create a server.
-2. Click **Install Agent** → the wizard generates a 20-minute, single-use enrollment token and shows the exact command.
-3. Run it on the target machine:
+> **⬇️ Download Windows Agent** → `DevOpsMonitorAgent-Setup.exe` (GitHub Releases)
+
+### Client workflow (no technical steps)
+
+1. **Log in** to the DevOps Monitor Pro dashboard.
+2. **Add a server** (Servers → Add Server).
+3. **Generate Enrollment Code** (Install Agent wizard) — one-time, valid 20 minutes.
+4. **Download the Windows Agent** (`DevOpsMonitorAgent-Setup.exe`).
+5. **Run the installer** on the computer/server to monitor.
+6. **Paste the enrollment code** when the wizard asks for it and click **Next** — the agent connects to the production backend automatically.
+7. **Finish installation** — monitoring starts and (recommended task) restarts automatically after reboots.
+8. **Return to the dashboard** — the server shows online with CPU/RAM/disk/health metrics.
+
+Clients never see GitHub, Python commands, `.env` files, server IDs or agent tokens. The permanent agent token returned at enrollment is stored locally in `%ProgramData%\DevOpsMonitorPro\config.json` and is never displayed.
+
+### Building & publishing the installer (maintainers)
+
+1. Set the production API URL in **`agent/build_config.ps1`** (`$ApiUrl = "https://devops-monitor-pro.vercel.app/api"`) — the single centralized build configuration. `http://` and localhost URLs are rejected by the build script.
+2. Build locally (needs Windows; installs Inno Setup via `winget install JRSoftware.InnoSetup` for the Setup exe):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File agent\build_windows.ps1
+```
+
+Outputs (both gitignored):
+- `agent/dist/DevOpsMonitorAgent.exe` — portable agent (double-click → enrollment GUI; `--enroll "TOKEN"` from a terminal).
+- `agent/dist/DevOpsMonitorAgent-Setup.exe` — **recommended for clients**: install wizard with enrollment-code page, optional start-on-reboot task, clean uninstall.
+
+3. Or let CI build it: pushing a `v*` tag or publishing a release triggers **`.github/workflows/build-agent-release.yml`** (Windows runner) which builds the installer, uploads it as a CI artifact and attaches `DevOpsMonitorAgent-Setup.exe` to the GitHub Release automatically.
+
+### GitHub Release steps
+
+1. Push a tag: `git tag v2.1.0 && git push origin v2.1.0` — CI attaches the installer to the release, **or**
+2. Manually: GitHub → Releases → Draft new release → attach `agent/dist/DevOpsMonitorAgent-Setup.exe` → publish.
+
+The dashboard download button points at `https://github.com/Rabiabbasi66/devops-monitor-pro/releases/latest` (override with the `AGENT_DOWNLOAD_URL` env var).
+
+### Developers (source checkout / servers)
+
+The Python agent remains available for development and testing:
 
 ```bash
 python agent.py --enroll "<ENROLLMENT_TOKEN>"
 ```
 
-The agent exchanges the token at `POST /api/agents/enroll`, receives its permanent agent token, saves `agent/agent_config.json` (gitignored), and starts sending metrics immediately.
+The agent exchanges the token at `POST /api/agents/enroll`, receives its permanent agent token, saves `agent/agent_config.json` (gitignored), and starts sending metrics immediately. Installer headless mode: `DevOpsMonitorAgent.exe --enroll-only "TOKEN" --result-file result.txt` (exit 0/1; never prints the token).
 
 ```json
 {

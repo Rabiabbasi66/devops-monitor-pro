@@ -7,12 +7,13 @@ does NOT need Python installed.
 
 Build with (from the agent/ directory):
 
-    .\\build_windows.ps1
+    .\\build_windows.ps1          # portable exe + (optional) Setup installer
 
 Security notes:
   - No credentials, tokens, MongoDB URIs or .env files are bundled. The
-    production API URL lives in agent/config.py (public default) and can be
-    overridden at runtime via the API_URL environment variable.
+    production API URL lives in agent/build_config.ps1 (set at build time and
+    baked into the bundle via a generated runtime hook) and can be overridden
+    at runtime via the API_URL environment variable.
   - Enrollment happens at runtime via POST /api/agents/enroll; the permanent
     agent token is only stored locally after successful enrollment.
 """
@@ -37,7 +38,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["_runtime_hook.py"],
     excludes=[
         # Keep the bundle lean; nothing here is used by the agent.
         "pytest",
