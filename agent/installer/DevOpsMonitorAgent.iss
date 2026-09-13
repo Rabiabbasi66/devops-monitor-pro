@@ -37,8 +37,8 @@
 
 [Setup]
 AppId={{B3F7A2C1-9D4E-4B8A-8F2C-1E6D5A7B9C3E}
+AppVersion=2.1.0
 AppName={#AppName}
-AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
@@ -125,12 +125,13 @@ end;
 procedure InitializeWizard();
 begin
   TokenPage := CreateInputQueryPage(wpSelectTasks,
-      'Connect Agent', 'Enter your enrollment code',
-      'Paste the one-time enrollment code from your DevOps Monitor Pro dashboard' #13#10 +
-      '(Servers - Install Agent - Generate Enrollment Code).' #13#10 #13#10 +
-      'The code is valid for 20 minutes and can be used only once. Click Cancel ' #13#10 +
-      'if you do not have a code yet - you can generate one in the dashboard.');
-  TokenPage.Add('Enrollment code:');
+      'Connect Agent',
+      'Enter your enrollment code',
+      'Paste the one-time enrollment code from your DevOps Monitor Pro dashboard ' +
+      '(Servers - Install Agent - Generate Enrollment Code). Click Cancel if you ' +
+      'do not have a code yet - you can generate one in the dashboard. ' +
+      'The code is valid for 20 minutes and can be used only once.');
+  TokenPage.Add('Enrollment code:', False);
   TokenPage.Values[0] := '';
 end;
 
@@ -150,7 +151,7 @@ begin
 
   if Token = '' then
   begin
-    MsgBox('Please paste the enrollment code from your dashboard first.' #13#10 #13#10 +
+    MsgBox('Please paste the enrollment code from your dashboard first.' + #13#10 + #13#10 +
            'Dashboard: Servers - Install Agent - Generate Enrollment Code.',
            mbError, MB_OK);
     Exit;
@@ -203,7 +204,7 @@ end;
 --------------------------------------------------------------------------- }
 function InitializeUninstall(): Boolean;
 begin
-  Result := MsgBox('Remove DevOps Monitor Pro Agent from this computer?' #13#10 #13#10 +
+  Result := MsgBox('Remove DevOps Monitor Pro Agent from this computer?' + #13#10 + #13#10 +
                    'Monitoring will stop and locally stored agent credentials will be deleted.',
                    mbConfirmation, MB_YESNO) = IDYES;
 end;

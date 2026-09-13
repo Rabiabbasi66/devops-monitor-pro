@@ -123,6 +123,25 @@ if (-not $iscc) {
     $cmd = Get-Command "iscc.exe" -ErrorAction SilentlyContinue
     if ($cmd) { $iscc = $cmd.Source }
 }
+if (-not $iscc) {
+    # Fallback: scan the concrete install roots where Inno Setup typically lives,
+    # including the winget default user install (%LOCALAPPDATA%\Programs).
+    $scanRoots = @(
+        "C:\Program Files",
+        "C:\Program Files (x86)"
+    )
+    $localApps = $env:LOCALAPPDATA + '\Programs'
+    if (Test-Path $localApps) { $scanRoots += $localApps }
+    foreach ($scanRoot in $scanRoots) {
+        if ((Test-Path $scanRoot) -eq $false) { continue }
+        $dirs = Get-ChildItem $scanRoot -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Inno Setup' }
+        foreach ($d in $dirs) {
+            $c = Join-Path $d.FullName 'ISCC.exe'
+            if (Test-Path $c) { $iscc = $c; break }
+        }
+        if ($iscc) { break }
+    }
+}
 
 if ($iscc) {
     Write-Host ""

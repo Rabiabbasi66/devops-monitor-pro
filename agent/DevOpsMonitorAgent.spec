@@ -34,7 +34,6 @@ a = Analysis(
         "pydantic",
         "pydantic_settings",
         "annotated_types",
-        "python_dotenv",
     ],
     hookspath=[],
     hooksconfig={},
