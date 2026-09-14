@@ -90,6 +90,13 @@ def _render_provider_card(api, provider, channel, provider_status):
     label = PROVIDER_LABELS.get(provider, provider)
     st.subheader(label)
 
+    if provider == "whatsapp":
+        st.caption(
+            "Your WhatsApp number is used only as the notification destination. "
+            "API credentials are managed securely by DevOps Monitor Pro — you "
+            "never enter an access token or phone number ID."
+        )
+
     if not provider_status.get("available", False):
         st.info(PLATFORM_UNAVAILABLE)
         return

@@ -1125,6 +1125,41 @@ async def test_create_whatsapp_channel_validates_e164(client):
 
 
 @pytest.mark.asyncio
+async def test_update_whatsapp_channel_validates_e164(client):
+    """The UPDATE path also rejects non-E.164 numbers; valid E.164 succeeds."""
+    headers = await _login_headers(client, _user_payload("updwa"))
+
+    resp = await client.post(
+        "/api/notifications/settings/",
+        headers=headers,
+        json={"provider": "whatsapp", "recipient": "+92 300 1234567"},
+    )
+    assert resp.status_code == 200, resp.text
+    channel_id = resp.json()["id"]
+
+    # Invalid recipient on update is rejected
+    resp = await client.put(
+        f"/api/notifications/settings/{channel_id}",
+        headers=headers,
+        json={"recipient": "555-1234"},
+    )
+    assert resp.status_code == 400
+    assert "E.164" in resp.text
+
+    # Valid E.164 recipient still updates successfully
+    resp = await client.put(
+        f"/api/notifications/settings/{channel_id}",
+        headers=headers,
+        json={"recipient": "+923001234567"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["recipient"] == "+923001234567"
+
+    # Cleanup
+    await client.delete(f"/api/notifications/settings/{channel_id}", headers=headers)
+
+
+@pytest.mark.asyncio
 async def test_providers_status_endpoint_no_secrets(client):
     """GET /providers/status returns booleans only, never credentials."""
     headers = await _login_headers(client, _user_payload("pstat"))
