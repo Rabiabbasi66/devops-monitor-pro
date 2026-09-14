@@ -1,15 +1,3 @@
-"""Client-facing enrollment GUI for the DevOps Monitor Pro agent.
-
-A deliberately lightweight tkinter window (bundled with Python, no extra
-packaging weight) so a normal Windows client can:
-
-  1. paste the one-time enrollment code from the dashboard,
-  2. click "Connect Agent",
-  3. see live status while monitoring starts automatically.
-
-The permanent agent token is never shown to the user and never logged.
-"""
-
 import logging
 import sys
 import threading
@@ -163,9 +151,12 @@ class AgentGUI:
             return
         self.status_var.set(
             "This agent is already enrolled and configured.\n"
-            "You can run it in the background or disconnect it below."
+            "Monitoring is running. You can disconnect it below."
         )
         self._show_enrolled_controls()
+        # Start monitoring immediately when already enrolled (e.g. right after
+        # the installer finishes, or when the client opens the agent again).
+        self._start_loop(creds)
 
     def _show_enrolled_controls(self) -> None:
         self.unenroll_btn.pack(anchor="w", pady=(6, 2))

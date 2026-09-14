@@ -84,6 +84,7 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN DevOpsMonitorProAgent /
 [Code]
 var
   TokenPage: TInputQueryWizardPage;
+  EnrollmentToken: string;
 
 { ---------------------------------------------------------------------------
   Enrollment: run the packaged agent's --enroll-only mode (same enrollment
@@ -92,17 +93,27 @@ var
 --------------------------------------------------------------------------- }
 function TryEnroll(Token: string; out ResultText: string): Boolean;
 var
-  ExePath, ResultFile, Params: string;
+  ExePath, TokenFile, ResultFile, Params: string;
   ResultCode: Integer;
   FileContents: AnsiString;
 begin
   Result := False;
   ResultText := '';
   ExePath := ExpandConstant('{app}\{#AppExeName}');
+  TokenFile := ExpandConstant('{tmp}\dmagent_token.txt');
   ResultFile := ExpandConstant('{tmp}\dmagent_enroll_result.txt');
+  DeleteFile(TokenFile);
   DeleteFile(ResultFile);
 
-  Params := Format('--enroll-only "%s" --result-file "%s"', [Token, ResultFile]);
+  { Pass the code via a temp file (--token-file): a code that starts with '-'}
+  { would otherwise be parsed by the agent as a command-line switch.        }
+  if not SaveStringToFile(TokenFile, Token, False) then
+  begin
+    ResultText := 'Could not prepare the enrollment code for the agent.';
+    Exit;
+  end;
+
+  Params := Format('--token-file "%s" --result-file "%s"', [TokenFile, ResultFile]);
   if not Exec(ExePath, Params, ExpandConstant('{app}'), SW_SHOW,
               ewWaitUntilTerminated, ResultCode) then
   begin
@@ -112,6 +123,7 @@ begin
 
   if LoadStringFromFile(ResultFile, FileContents) then
     ResultText := Trim(string(FileContents));
+  DeleteFile(TokenFile);
   DeleteFile(ResultFile);
 
   Result := (ResultCode = 0) and (ResultText = 'OK');
@@ -137,7 +149,7 @@ end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Token, FailReason: string;
+  Token: string;
 begin
   Result := True;
 
@@ -157,18 +169,10 @@ begin
     Exit;
   end;
 
-  WizardForm.StatusLabel.Caption := 'Connecting this computer to the monitoring platform...';
-
-  if TryEnroll(Token, FailReason) then
-  begin
-    Result := True;
-    Exit;
-  end;
-
-  if FailReason = '' then
-    FailReason := 'Enrollment failed. Please check the enrollment code and try again.';
-
-  MsgBox(FailReason, mbError, MB_OK);
+  { Store the code. Enrollment runs AFTER the files are installed (ssPostInstall)
+    because the agent executable does not exist yet on this wizard page. }
+  EnrollmentToken := Token;
+  Result := True;
 end;
 
 { ---------------------------------------------------------------------------
@@ -191,11 +195,27 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  FailReason: string;
 begin
   if CurStep = ssPostInstall then
   begin
     if IsTaskSelected('autostart') then
       InstallAutostart();
+
+    { Enrollment runs here - only now does the installed agent executable exist.
+      The token was collected on the wizard page before installation. }
+    if EnrollmentToken <> '' then
+    begin
+      if TryEnroll(EnrollmentToken, FailReason) then
+        MsgBox('Agent connected successfully. Monitoring has started.', mbInformation, MB_OK)
+      else
+      begin
+        if FailReason = '' then
+          FailReason := 'Enrollment failed. Please check the enrollment code and try again.';
+        MsgBox(FailReason, mbError, MB_OK);
+      end;
+    end;
   end;
 end;
 

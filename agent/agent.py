@@ -276,6 +276,29 @@ def run_console_mode(args) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_dash_tokens(argv: list) -> list:
+    """argparse cannot take a value starting with '-' for --enroll/--enroll-only.
+
+    Enrollment codes are base64url and may legitimately start with '-' or '_',
+    so rewrite ``--flag <value>`` pairs whose value looks like a switch into
+    the ``--flag=<value>`` form which argparse accepts.
+    """
+    out = []
+    skip_next = False
+    for i, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("--enroll", "--enroll-only", "--token-file") and i + 1 < len(argv):
+            nxt = argv[i + 1]
+            if nxt.startswith("-") and len(nxt) > 1 and not nxt.startswith("--"):
+                out.append(f"{arg}={nxt}")
+                skip_next = True
+                continue
+        out.append(arg)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DevOps Monitor Pro Agent")
     parser.add_argument("--enroll", help="Enrollment token for automatic agent setup")
@@ -307,7 +330,7 @@ def main() -> int:
         action="store_true",
         help="Force the classic console mode (development/servers)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(_normalize_dash_tokens(sys.argv[1:]))
 
     # Installer contract: enroll, report machine-readable success, exit.
     # Presence checks (not truthiness) so empty strings are still handled here.
