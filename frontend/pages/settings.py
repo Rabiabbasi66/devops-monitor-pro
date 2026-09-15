@@ -8,7 +8,13 @@ NOTIFICATION_TYPES = ["alert", "recovery", "offline"]
 
 def render(api: APIClient):
     st.title("⚙️ Settings")
-    user = st.session_state.get("user", {})
+    user = st.session_state.get("user")
+    if not user:
+        # Session state can lose the cached profile; refresh it from the
+        # backend via the canonical current-user endpoint (GET {API_URL}/auth/me),
+        # which always resolves to the configured production API base.
+        api.get_user_details()
+        user = st.session_state.get("user") or {}
 
     # Profile Section
     st.header("👤 Profile")

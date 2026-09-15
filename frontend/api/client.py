@@ -35,16 +35,28 @@ class APIClient:
             data = response.json()
             st.session_state.token = data["access_token"]
             st.session_state.refresh_token = data.get("refresh_token")
-            try:
-                user_response = requests.get(
-                    f"{API_URL}/auth/me", headers=self._headers(), timeout=15
-                )
-                if user_response.status_code == 200:
-                    st.session_state.user = user_response.json()
-            except requests.exceptions.RequestException:
-                pass
+            self.get_user_details()
             return True
         return False
+
+    def get_user_details(self):
+        """Fetch the current user's profile from the backend.
+
+        Canonical current-user/user-details endpoint: ``GET {API_URL}/auth/me``
+        (the backend has no ``/user/details`` or ``/api/v2`` routes — those
+        requests 404 against the wrong origin). On success the profile is
+        cached in ``st.session_state.user``.
+        """
+        try:
+            response = requests.get(
+                f"{API_URL}/auth/me", headers=self._headers(), timeout=15
+            )
+        except requests.exceptions.RequestException as e:
+            st.error(f"Connection error: {e}")
+            return _ErrorResponse(str(e))
+        if response.status_code == 200:
+            st.session_state.user = response.json()
+        return response
 
     def register(self, email, username, password, confirm_password, full_name=None):
         try:
