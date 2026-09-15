@@ -8,8 +8,6 @@ from pydantic import Field
 
 class NotificationProviderType(str, enum.Enum):
     EMAIL = "email"
-    WHATSAPP = "whatsapp"
-    TELEGRAM = "telegram"
 
 
 # Key fragments that must never be persisted in provider_metadata.

@@ -52,25 +52,6 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_FROM_NAME: str = "DevOps Monitor Pro"
 
-    # WhatsApp Notification Settings (platform-managed provider credentials)
-    WHATSAPP_ENABLED: bool = False
-    WHATSAPP_API_URL: str = "https://graph.facebook.com/v17.0"
-    WHATSAPP_PHONE_NUMBER_ID: str = ""
-    WHATSAPP_ACCESS_TOKEN: str = ""
-    WHATSAPP_TIMEOUT: int = 30
-
-    # Telegram Notification Settings (platform-managed bot credentials)
-    TELEGRAM_ENABLED: bool = False
-    TELEGRAM_BOT_TOKEN: str = ""
-    TELEGRAM_TIMEOUT: int = 30
-    TELEGRAM_PARSE_MODE: str = "HTML"
-    # Optional static bot username for deep links (skips getMe lookup)
-    TELEGRAM_BOT_USERNAME: str = ""
-    # Shared secret used to verify Telegram webhook calls (set_webhook secret_token)
-    TELEGRAM_WEBHOOK_SECRET: str = ""
-    # How long a one-time Telegram connection token stays valid
-    TELEGRAM_CONNECT_TOKEN_EXPIRE_MINUTES: int = 15
-
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",

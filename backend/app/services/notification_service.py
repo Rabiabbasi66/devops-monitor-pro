@@ -10,10 +10,10 @@ from ..models.notification_settings import (
     sanitize_provider_metadata,
 )
 from ..models.server import Server
-from ..models.telegram_connection import (
-    TelegramConnectionToken,
-    generate_connection_token,
-    hash_connection_token,
+from ..models.email_verification import (
+    EmailVerification,
+    generate_verification_code,
+    hash_verification_code,
 )
 from ..utils.secret_masking import redact_secrets
 from ..config import settings
@@ -23,30 +23,18 @@ logger = logging.getLogger("devops_monitor")
 
 class NotificationService:
     def __init__(self):
-        # Lazy import providers to avoid circular dependencies
         self._providers = None
         self._provider_configs = {}
-        self._telegram_bot_username: Optional[str] = None
     
     def _get_providers(self) -> Dict[str, Any]:
-        """Lazy load provider classes and (re)build platform infrastructure
-        configuration from settings.
-
-        Configuration is re-read on every call so environment (.env) values
-        are always authoritative and provider enablement is never hard-coded.
-        Provider configs hold platform credentials only - user channel
-        documents never contain them.
-        """
+        """Lazy load provider classes and build platform infrastructure configuration."""
         if self._providers is None:
-            from .notifications import EmailProvider, WhatsAppProvider, TelegramProvider
+            from .notifications import EmailProvider
 
             self._providers = {
                 NotificationProviderType.EMAIL: EmailProvider,
-                NotificationProviderType.WHATSAPP: WhatsAppProvider,
-                NotificationProviderType.TELEGRAM: TelegramProvider,
             }
 
-        # Provider infrastructure configurations from environment (platform-level)
         self._provider_configs = {
             NotificationProviderType.EMAIL: {
                 "enabled": settings.SMTP_ENABLED if hasattr(settings, "SMTP_ENABLED") else False,
@@ -57,19 +45,6 @@ class NotificationService:
                 "smtp_use_tls": getattr(settings, "SMTP_USE_TLS", True),
                 "smtp_from_email": getattr(settings, "SMTP_FROM_EMAIL", ""),
                 "smtp_from_name": getattr(settings, "SMTP_FROM_NAME", "DevOps Monitor Pro"),
-            },
-            NotificationProviderType.WHATSAPP: {
-                "enabled": settings.WHATSAPP_ENABLED if hasattr(settings, "WHATSAPP_ENABLED") else False,
-                "whatsapp_api_url": getattr(settings, "WHATSAPP_API_URL", "https://graph.facebook.com/v17.0"),
-                "whatsapp_phone_number_id": getattr(settings, "WHATSAPP_PHONE_NUMBER_ID", ""),
-                "whatsapp_access_token": getattr(settings, "WHATSAPP_ACCESS_TOKEN", ""),
-                "whatsapp_timeout": getattr(settings, "WHATSAPP_TIMEOUT", 30),
-            },
-            NotificationProviderType.TELEGRAM: {
-                "enabled": settings.TELEGRAM_ENABLED if hasattr(settings, "TELEGRAM_ENABLED") else False,
-                "telegram_bot_token": getattr(settings, "TELEGRAM_BOT_TOKEN", ""),
-                "telegram_timeout": getattr(settings, "TELEGRAM_TIMEOUT", 30),
-                "telegram_parse_mode": getattr(settings, "TELEGRAM_PARSE_MODE", "HTML"),
             },
         }
 
@@ -455,173 +430,112 @@ class NotificationService:
         return channel
 
     # ------------------------------------------------------------------
-    # Telegram connection (platform-managed bot onboarding)
+    # Email verification (platform-managed SMTP)
     # ------------------------------------------------------------------
 
-    def _telegram_ready(self) -> bool:
-        """Whether the platform Telegram infrastructure is usable."""
-        self._get_providers()
-        from .notifications import TelegramProvider
+    async def request_email_verification(self, user_id: str, email: str) -> Dict[str, Any]:
+        """Request an email verification code.
 
-        config = self._provider_configs.get(NotificationProviderType.TELEGRAM, {})
-        provider = TelegramProvider(config)
-        return provider.is_enabled() and provider.missing_config() is None
-
-    async def _get_telegram_bot_username(self) -> Optional[str]:
-        """Resolve the platform bot username via getMe (cached, no secrets)."""
-        if self._telegram_bot_username:
-            return self._telegram_bot_username
-        if getattr(settings, "TELEGRAM_BOT_USERNAME", ""):
-            self._telegram_bot_username = settings.TELEGRAM_BOT_USERNAME
-            return self._telegram_bot_username
-
-        self._get_providers()
-        token = self._provider_configs.get(NotificationProviderType.TELEGRAM, {}).get(
-            "telegram_bot_token", ""
-        )
-        if not token:
-            return None
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-                if resp.status_code == 200 and resp.json().get("ok"):
-                    self._telegram_bot_username = resp.json()["result"].get("username")
-                    return self._telegram_bot_username
-                logger.error("Telegram getMe failed: status=%s", resp.status_code)
-        except Exception as exc:
-            # Never log the token (it is part of the request URL)
-            logger.error("Telegram getMe failed: %s", redact_secrets(str(exc), [token]))
-        return None
-
-    async def create_telegram_connect_token(self, user_id: str) -> Dict[str, Any]:
-        """Create a one-time Telegram connection token for a user.
-
-        The raw token is returned once (to build the t.me deep link); only its
-        SHA-256 hash is stored. Tokens expire, are single-use, and never
-        contain user information.
+        Generates a 6-digit code, stores its hash, and sends it via the
+        configured SMTP provider. Codes expire in 10 minutes and are single-use.
         """
-        if not self._telegram_ready():
-            return {"success": False, "error": "Telegram provider is not available"}
+        # Validate email format
+        from ..utils.validators import validate_email_format
+        if not validate_email_format(email):
+            return {"success": False, "error": "Invalid email address"}
 
-        raw_token = generate_connection_token()
-        record = TelegramConnectionToken(
+        # Check if SMTP is configured
+        self._get_providers()
+        email_config = self._provider_configs.get(NotificationProviderType.EMAIL, {})
+        email_provider = self._providers.get(NotificationProviderType.EMAIL)
+        if not email_provider or not email_config.get("enabled", False):
+            provider_instance = email_provider(email_config) if email_provider else None
+            missing = provider_instance.missing_config() if provider_instance else "Email provider not available"
+            return {"success": False, "error": missing or "Email provider is not configured"}
+
+        # Delete any existing unused verification codes for this user/email
+        await EmailVerification.find(
+            EmailVerification.user_id == user_id,
+            EmailVerification.email == email,
+            EmailVerification.used == False
+        ).delete_many()
+
+        # Generate and store verification code
+        raw_code = generate_verification_code()
+        verification = EmailVerification(
             user_id=user_id,
-            token_hash=hash_connection_token(raw_token),
-            expires_at=TelegramConnectionToken.build_expiry(),
+            email=email,
+            code_hash=hash_verification_code(raw_code),
+            expires_at=EmailVerification.build_expiry(minutes=10),
         )
-        await record.insert()
+        await verification.insert()
 
-        bot_username = await self._get_telegram_bot_username()
-        connect_url = f"https://t.me/{bot_username}?start={raw_token}" if bot_username else None
+        # Send verification email
+        result = await email_provider.send_with_result(
+            recipient=email,
+            title="Email Verification Code",
+            message=f"Your verification code is: {raw_code}\n\nThis code expires in 10 minutes.",
+            severity="info",
+            metadata={"verification": True, "timestamp": datetime.utcnow().isoformat()}
+        )
 
-        return {
-            "success": True,
-            "token": raw_token,
-            "bot_username": bot_username,
-            "connect_url": connect_url,
-            "expires_at": record.expires_at.isoformat(),
-        }
+        if result.success:
+            logger.info("Verification code sent to %s for user %s", email, user_id)
+            return {"success": True, "message": "Verification code sent to your email"}
+        else:
+            await verification.delete()
+            logger.error("Failed to send verification code to %s: %s", email, result.error)
+            return {"success": False, "error": result.error or "Failed to send verification email"}
 
-    async def complete_telegram_connect(
-        self, raw_token: str, chat_id: str, telegram_username: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Map a Telegram chat_id to the user that owns ``raw_token``.
+    async def verify_email_code(self, user_id: str, email: str, code: str) -> Dict[str, Any]:
+        """Verify an email verification code.
 
-        Called by the platform bot webhook after the user sends
-        ``/start <token>``. The token is single-use and must not be expired.
+        Validates the code against the stored hash, checks expiration and
+        single-use status, and marks the code as used on success.
         """
-        if not raw_token or not chat_id:
-            return {"success": False, "error": "Missing connection token or chat id"}
+        if not code or len(code) != 6 or not code.isdigit():
+            return {"success": False, "error": "Invalid verification code format"}
 
-        token_hash = hash_connection_token(raw_token)
-        record = await TelegramConnectionToken.find_one(
-            TelegramConnectionToken.token_hash == token_hash
-        )
-        if not record:
-            return {"success": False, "error": "Invalid connection token"}
-        if record.used:
-            return {"success": False, "error": "Connection token has already been used"}
-        if record.is_expired():
-            await record.delete()
-            return {"success": False, "error": "Connection token has expired"}
-
-        record.used = True
-        record.used_at = datetime.utcnow()
-        record.chat_id = str(chat_id)
-        record.telegram_username = telegram_username
-        await record.save()
-
-        # Safe identifiers only - never secrets
-        metadata = sanitize_provider_metadata(
-            {"chat_id": str(chat_id), "telegram_username": telegram_username}
+        code_hash = hash_verification_code(code)
+        verification = await EmailVerification.find_one(
+            EmailVerification.user_id == user_id,
+            EmailVerification.email == email,
+            EmailVerification.code_hash == code_hash,
+            EmailVerification.used == False
         )
 
+        if not verification:
+            return {"success": False, "error": "Invalid verification code"}
+
+        if verification.is_expired():
+            await verification.delete()
+            return {"success": False, "error": "Verification code has expired"}
+
+        # Mark as used
+        verification.used = True
+        verification.used_at = datetime.utcnow()
+        await verification.save()
+
+        # Create or update the email notification channel
         existing = await NotificationChannelConfig.find_one(
-            NotificationChannelConfig.user_id == record.user_id,
-            NotificationChannelConfig.provider == NotificationProviderType.TELEGRAM,
+            NotificationChannelConfig.user_id == user_id,
+            NotificationChannelConfig.provider == NotificationProviderType.EMAIL,
         )
         if existing:
-            existing.recipient = str(chat_id)
-            existing.provider_metadata = metadata
+            existing.recipient = email
             existing.enabled = True
             existing.updated_at = datetime.utcnow()
             await existing.save()
         else:
             await NotificationChannelConfig(
-                user_id=record.user_id,
-                provider=NotificationProviderType.TELEGRAM,
-                recipient=str(chat_id),
+                user_id=user_id,
+                provider=NotificationProviderType.EMAIL,
+                recipient=email,
                 enabled=True,
-                provider_metadata=metadata,
+                min_severity="warning",
+                notification_types=["alert", "recovery", "offline"],
+                cooldown_seconds=300,
             ).insert()
 
-        logger.info("Telegram connection completed for user %s", record.user_id)
-        return {"success": True, "user_id": record.user_id, "chat_id": str(chat_id)}
-
-    async def get_telegram_connect_status(self, user_id: str, raw_token: str) -> Dict[str, Any]:
-        """Check whether a pending connection token has been completed.
-
-        Ownership: the token record must belong to ``user_id``.
-        """
-        if not raw_token:
-            return {"connected": False, "error": "Connection token is required"}
-
-        token_hash = hash_connection_token(raw_token)
-        record = await TelegramConnectionToken.find_one(
-            TelegramConnectionToken.token_hash == token_hash
-        )
-        if not record or record.user_id != user_id:
-            return {"connected": False, "error": "Invalid connection token"}
-        if record.used:
-            return {
-                "connected": True,
-                "chat_id": record.chat_id,
-                "telegram_username": record.telegram_username,
-            }
-        if record.is_expired():
-            return {
-                "connected": False,
-                "expired": True,
-                "error": "Connection token has expired",
-            }
-        return {
-            "connected": False,
-            "pending": True,
-            "expires_at": record.expires_at.isoformat(),
-        }
-
-    async def disconnect_telegram(self, user_id: str) -> Dict[str, Any]:
-        """Remove the user's Telegram channel(s)."""
-        channels = await NotificationChannelConfig.find(
-            NotificationChannelConfig.user_id == user_id,
-            NotificationChannelConfig.provider == NotificationProviderType.TELEGRAM,
-        ).to_list()
-        for channel in channels:
-            await channel.delete()
-        return {
-            "success": True,
-            "disconnected": len(channels) > 0,
-            "channels_removed": len(channels),
-        }
+        logger.info("Email verified for user %s: %s", user_id, email)
+        return {"success": True, "verified": True, "message": "Email verified successfully"}

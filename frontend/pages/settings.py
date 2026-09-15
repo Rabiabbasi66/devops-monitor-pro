@@ -1,16 +1,9 @@
-import pandas as pd
 import streamlit as st
 
 from api.client import APIClient
 
-PROVIDER_LABELS = {
-    "email": "📧 Email",
-    "whatsapp": "💬 WhatsApp",
-    "telegram": "✈️ Telegram",
-}
 SEVERITIES = ["info", "warning", "high", "critical"]
-NOTIFICATION_TYPES = ["alert", "recovery", "offline", "security"]
-PLATFORM_UNAVAILABLE = "**Platform configuration unavailable.** Contact administrator."
+NOTIFICATION_TYPES = ["alert", "recovery", "offline"]
 
 
 def render(api: APIClient):
@@ -25,7 +18,7 @@ def render(api: APIClient):
 
     st.markdown("---")
 
-    render_notification_channels(api)
+    render_email_notifications(api)
 
     st.markdown("---")
 
@@ -38,7 +31,7 @@ def render(api: APIClient):
         if resp.status_code == 200:
             logs = resp.json().get("items", [])
             if logs:
-                st.dataframe(pd.DataFrame(logs), use_container_width=True)
+                st.dataframe(logs, use_container_width=True)
             else:
                 st.info("No audit logs yet.")
         else:
@@ -47,249 +40,161 @@ def render(api: APIClient):
         st.subheader("Users")
         users_resp = api.get("/admin/users")
         if users_resp.status_code == 200:
-            st.dataframe(pd.DataFrame(users_resp.json()), use_container_width=True)
+            st.dataframe(users_resp.json(), use_container_width=True)
 
 
-# =========================================================================
-# Notification Channels (multi-tenant SaaS architecture)
-#
-# Platform provider credentials (SMTP, WhatsApp sender, Telegram bot) are
-# managed by the platform administrator via environment configuration.
-# Clients only connect their own recipient destination. No credential
-# fields (Phone Number ID, Access Token, Bot Token, SMTP password) are
-# ever shown here.
-# =========================================================================
-
-
-def _load_provider_status(api: APIClient) -> dict:
-    """Fetch platform provider availability (booleans only, no secrets)."""
-    resp = api.get("/notifications/settings/providers/status")
-    if resp.status_code == 200:
-        return resp.json().get("providers", {})
-    return {}
-
-
-def render_notification_channels(api: APIClient):
-    st.header("🔔 Notification Channels")
+def render_email_notifications(api: APIClient):
+    st.header("🔔 Email Notifications")
     st.markdown(
-        "Choose where alerts are delivered. Provider infrastructure is managed "
-        "by the platform administrator — you only connect your own recipient."
+        "Configure email notifications for alerts. SMTP credentials are managed "
+        "securely by the platform — you only provide your email address."
     )
 
-    status = _load_provider_status(api)
-
+    # Check if email is already configured
     channels_resp = api.get("/notifications/settings")
     channels = channels_resp.json() if channels_resp.status_code == 200 else []
-    by_provider = {c.get("provider"): c for c in channels}
+    email_channel = next((c for c in channels if c.get("provider") == "email"), None)
 
-    for provider in ["email", "whatsapp", "telegram"]:
-        _render_provider_card(api, provider, by_provider.get(provider), status.get(provider, {}))
+    if email_channel and email_channel.get("enabled"):
+        st.success(f"✅ Email verified: `{email_channel.get('recipient', '')}`")
+        _render_email_configuration(api, email_channel)
+    else:
+        st.warning("Email not verified")
+        _render_email_verification(api)
 
 
-def _render_provider_card(api, provider, channel, provider_status):
-    label = PROVIDER_LABELS.get(provider, provider)
-    st.subheader(label)
-
-    if provider == "whatsapp":
-        st.caption(
-            "Your WhatsApp number is used only as the notification destination. "
-            "API credentials are managed securely by DevOps Monitor Pro — you "
-            "never enter an access token or phone number ID."
+def _render_email_verification(api: APIClient):
+    with st.expander("Verify Email", expanded=True):
+        email = st.text_input(
+            "Email address",
+            placeholder="you@example.com",
+            key="email_verify_input",
+            help="Enter your email address to receive a verification code"
         )
 
-    if not provider_status.get("available", False):
-        st.info(PLATFORM_UNAVAILABLE)
-        return
+        if st.button("📧 Send verification code", key="send_verify", use_container_width=True):
+            if not email:
+                st.error("❌ Please enter an email address")
+                return
 
-    if channel:
-        connected = "Connected ✓" if channel.get("enabled") else "Disabled"
-        st.success(f"{connected}  |  `{channel.get('recipient', '')}`")
-        _render_connected_actions(api, provider, channel)
-    else:
-        st.warning("Not connected")
-        if provider == "telegram":
-            _render_telegram_connect(api)
-        else:
-            _render_configure_form(api, provider, None)
-
-
-def _render_connected_actions(api, provider, channel):
-    has_disconnect = provider in ("whatsapp", "telegram")
-    columns = st.columns(3) if has_disconnect else st.columns(2)
-
-    with columns[0]:
-        if st.button("🧪 Test", key=f"test_{provider}", use_container_width=True):
-            resp = api.post(
-                "/notifications/settings/test",
-                json={"provider": provider, "recipient": channel.get("recipient")},
-            )
-            _show_test_result(resp)
-
-    with columns[1]:
-        if st.button("⚙️ Configure", key=f"cfg_{provider}", use_container_width=True):
-            st.session_state[f"configure_{provider}"] = not st.session_state.get(
-                f"configure_{provider}", False
-            )
-
-    if has_disconnect:
-        with columns[2]:
-            if st.button("🔌 Disconnect", key=f"disc_{provider}", use_container_width=True):
-                if provider == "telegram":
-                    resp = api.delete("/notifications/settings/telegram/disconnect")
+            resp = api.post("/notifications/settings/email/request-verification", json={"email": email})
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success"):
+                    st.success("✅ Verification code sent! Check your email.")
+                    st.session_state["verify_email"] = email
                 else:
-                    resp = api.delete(f"/notifications/settings/{channel['id']}")
+                    st.error(f"❌ {data.get('error', 'Failed to send verification code')}")
+            else:
+                st.error("❌ Failed to request verification code")
+
+        if st.session_state.get("verify_email"):
+            st.markdown("#### Enter verification code")
+            code = st.text_input(
+                "Verification code",
+                placeholder="123456",
+                key="verify_code_input",
+                max_chars=6,
+                help="Enter the 6-digit code from your email"
+            )
+
+            if st.button("✅ Verify Email", key="verify_email_btn", use_container_width=True):
+                if not code or len(code) != 6:
+                    st.error("❌ Please enter a valid 6-digit code")
+                    return
+
+                resp = api.post(
+                    "/notifications/settings/email/verify",
+                    json={"email": st.session_state["verify_email"], "code": code}
+                )
                 if resp.status_code == 200:
-                    st.success("Disconnected")
-                    st.rerun()
+                    data = resp.json()
+                    if data.get("success"):
+                        st.success("✅ Email verified successfully!")
+                        st.balloons()
+                        st.session_state.pop("verify_email", None)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {data.get('error', 'Verification failed')}")
                 else:
-                    st.error("Failed to disconnect")
-
-    if st.session_state.get(f"configure_{provider}", False):
-        _render_configure_form(api, provider, channel)
+                    st.error("❌ Verification failed")
 
 
-def _show_test_result(resp):
-    if resp.status_code != 200:
-        st.error("❌ Failed to send test notification")
-        return
-    try:
-        data = resp.json()
-    except Exception:
-        data = {}
-    if data.get("success"):
-        st.success("✅ Test notification sent successfully!")
-    else:
-        details = data.get("details", {})
-        st.error(f"❌ Test failed: {details.get('error', 'Unknown error')}")
+def _render_email_configuration(api: APIClient, channel):
+    st.markdown("#### Email Settings")
 
-def _render_configure_form(api, provider, channel):
-    is_update = channel is not None
     with st.expander("Channel settings", expanded=True):
-        if provider == "telegram" and not is_update:
-            st.info("Use **Connect Telegram** — no manual chat ID entry needed.")
-            recipient = ""
-        else:
-            placeholder = {"email": "you@example.com", "whatsapp": "+92 300 1234567"}.get(provider, "")
-            recipient = st.text_input(
-                "Recipient",
-                value=(channel.get("recipient", "") if is_update else ""),
-                placeholder=placeholder,
-                key=f"recipient_{provider}",
-                help="Email for Email; international phone number (E.164) for WhatsApp.",
-            )
-
-        default_severity = channel.get("min_severity", "warning") if is_update else "warning"
+        default_severity = channel.get("min_severity", "warning")
         min_severity = st.selectbox(
             "Minimum severity",
             SEVERITIES,
             index=SEVERITIES.index(default_severity) if default_severity in SEVERITIES else 1,
-            key=f"severity_{provider}",
-            help="Only send notifications of this severity or higher",
+            key="email_severity",
+            help="Only send notifications of this severity or higher"
         )
 
-        default_types = (
-            channel.get("notification_types", ["alert", "recovery", "offline"])
-            if is_update
-            else ["alert", "recovery", "offline"]
-        )
+        default_types = channel.get("notification_types", ["alert", "recovery", "offline"])
         notification_types = st.multiselect(
             "Notification types",
             NOTIFICATION_TYPES,
             default=[t for t in default_types if t in NOTIFICATION_TYPES],
-            key=f"types_{provider}",
-            help="Which types of notifications to send through this channel",
+            key="email_types",
+            help="Which types of notifications to send"
         )
 
         cooldown_seconds = st.slider(
             "Cooldown (seconds)",
             min_value=0,
             max_value=3600,
-            value=(channel.get("cooldown_seconds", 300) if is_update else 300),
+            value=channel.get("cooldown_seconds", 300),
             step=60,
-            key=f"cooldown_{provider}",
-            help="Minimum time between notifications through this channel",
+            key="email_cooldown",
+            help="Minimum time between notifications"
         )
 
         enabled = st.checkbox(
-            "Enable channel",
-            value=(channel.get("enabled", True) if is_update else True),
-            key=f"enabled_{provider}",
+            "Enable notifications",
+            value=channel.get("enabled", True),
+            key="email_enabled"
         )
 
-        if st.button("💾 Save", key=f"save_{provider}", use_container_width=True):
-            if provider != "telegram" and not recipient:
-                st.error("❌ Please enter a recipient")
-                return
-            payload = {
-                "provider": provider,
-                "enabled": enabled,
-                "recipient": recipient,
-                "min_severity": min_severity,
-                "notification_types": notification_types,
-                "cooldown_seconds": cooldown_seconds,
-            }
-            if is_update:
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save", key="save_email", use_container_width=True):
+                payload = {
+                    "provider": "email",
+                    "enabled": enabled,
+                    "recipient": channel.get("recipient"),
+                    "min_severity": min_severity,
+                    "notification_types": notification_types,
+                    "cooldown_seconds": cooldown_seconds,
+                }
                 resp = api.put(f"/notifications/settings/{channel['id']}", json=payload)
-            else:
-                resp = api.post("/notifications/settings", json=payload)
+                if resp.status_code == 200:
+                    st.success("✅ Settings saved!")
+                else:
+                    st.error("❌ Failed to save settings")
+
+        with col2:
+            if st.button("🧪 Test Email", key="test_email", use_container_width=True):
+                resp = api.post(
+                    "/notifications/settings/test",
+                    json={"provider": "email", "recipient": channel.get("recipient")}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("success"):
+                        st.success("✅ Test email sent successfully!")
+                    else:
+                        st.error(f"❌ Test failed: {data.get('details', {}).get('error', 'Unknown error')}")
+                else:
+                    st.error("❌ Failed to send test email")
+
+        if st.button("🔌 Disable", key="disable_email", use_container_width=True):
+            payload = {"enabled": False}
+            resp = api.put(f"/notifications/settings/{channel['id']}", json=payload)
             if resp.status_code == 200:
-                st.success("✅ Notification channel saved!")
-                st.session_state[f"configure_{provider}"] = False
+                st.success("✅ Email notifications disabled")
                 st.rerun()
             else:
-                try:
-                    detail = resp.json().get("detail", "")
-                except Exception:
-                    detail = ""
-                st.error(f"❌ Failed to save channel: {detail or 'Unknown error'}")
-
-
-def _render_telegram_connect(api: APIClient):
-    """One-time token flow for the platform-managed Telegram bot."""
-    if st.button("🔗 Connect Telegram", key="tg_connect", use_container_width=True):
-        resp = api.post("/notifications/settings/telegram/connect")
-        if resp.status_code == 200:
-            data = resp.json()
-            st.session_state["tg_token"] = data.get("token")
-            st.session_state["tg_url"] = data.get("connect_url")
-            st.session_state["tg_bot"] = data.get("bot_username")
-        else:
-            try:
-                detail = resp.json().get("detail", "")
-            except Exception:
-                detail = ""
-            st.error(detail or "Could not start Telegram connection")
-
-    token = st.session_state.get("tg_token")
-    if not token:
-        return
-
-    url = st.session_state.get("tg_url")
-    bot = st.session_state.get("tg_bot")
-    st.markdown("#### Finish connecting Telegram")
-    bot_label = f"[@{bot}](https://t.me/{bot})" if bot else "the platform bot"
-    st.markdown(
-        f"1. Open the platform bot: {bot_label}\n"
-        "2. Send **/start** to it (the link below includes your one-time "
-        "connection token automatically)\n"
-        "3. Click **Check status**"
-    )
-    if url:
-        st.markdown(f"[Open bot and connect]({url})")
-    st.code(f"/start {token}", language=None)
-
-    if st.button("✅ Check status", key="tg_check", use_container_width=True):
-        resp = api.get("/notifications/settings/telegram/connect/status", token=token)
-        if resp.status_code == 200 and resp.json().get("connected"):
-            st.success("Telegram connected!")
-            st.session_state.pop("tg_token", None)
-            st.session_state.pop("tg_url", None)
-            st.rerun()
-        elif resp.status_code == 200:
-            status_data = resp.json()
-            if status_data.get("expired"):
-                st.warning("Connection token expired — click Connect Telegram again.")
-            else:
-                st.info("Not connected yet — send /start to the bot, then check again.")
-        else:
-            st.error("Failed to check connection status")
+                st.error("❌ Failed to disable")

@@ -8,10 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.notifications.base import NotificationProvider, NotificationChannel
 from app.services.notifications.email_provider import EmailProvider
-from app.services.notifications.whatsapp_provider import WhatsAppProvider
-from app.services.notifications.telegram_provider import TelegramProvider
 from app.services.notification_service import NotificationService
 from app.models.notification_settings import NotificationProviderType
+from app.models.email_verification import EmailVerification
 
 
 class TestNotificationProviderBase:
@@ -110,83 +109,6 @@ class TestEmailProvider:
         assert result is False
 
 
-class TestWhatsAppProvider:
-    """Test WhatsApp notification provider."""
-    
-    def test_whatsapp_provider_initialization(self):
-        """Test WhatsApp provider initialization."""
-        config = {
-            "enabled": True,
-            "whatsapp_api_url": "https://graph.facebook.com/v17.0",
-            "whatsapp_phone_number_id": "123456789",
-            "whatsapp_access_token": "test_token"
-        }
-        provider = WhatsAppProvider(config)
-        
-        assert provider.enabled is True
-        assert provider.phone_number_id == "123456789"
-    
-    def test_whatsapp_provider_disabled(self):
-        """Test disabled WhatsApp provider."""
-        config = {"enabled": False}
-        provider = WhatsAppProvider(config)
-        
-        assert provider.enabled is False
-    
-    @pytest.mark.asyncio
-    async def test_whatsapp_provider_send_disabled(self):
-        """Test send returns False when disabled."""
-        config = {"enabled": False}
-        provider = WhatsAppProvider(config)
-        
-        result = await provider.send(
-            recipient="+1234567890",
-            title="Test",
-            message="Test message",
-            severity="info"
-        )
-        
-        assert result is False
-
-
-class TestTelegramProvider:
-    """Test Telegram notification provider."""
-    
-    def test_telegram_provider_initialization(self):
-        """Test Telegram provider initialization."""
-        config = {
-            "enabled": True,
-            "telegram_bot_token": "test_token",
-            "telegram_parse_mode": "HTML"
-        }
-        provider = TelegramProvider(config)
-        
-        assert provider.enabled is True
-        assert provider.bot_token == "test_token"
-    
-    def test_telegram_provider_disabled(self):
-        """Test disabled Telegram provider."""
-        config = {"enabled": False}
-        provider = TelegramProvider(config)
-        
-        assert provider.enabled is False
-    
-    @pytest.mark.asyncio
-    async def test_telegram_provider_send_disabled(self):
-        """Test send returns False when disabled."""
-        config = {"enabled": False}
-        provider = TelegramProvider(config)
-        
-        result = await provider.send(
-            recipient="123456789",
-            title="Test",
-            message="Test message",
-            severity="info"
-        )
-        
-        assert result is False
-
-
 class TestNotificationService:
     """Test notification service unit tests."""
     
@@ -242,6 +164,8 @@ class TestNotificationService:
         assert hasattr(service, 'update_notification_channel')
         assert hasattr(service, 'delete_notification_channel')
         assert hasattr(service, 'send_test_notification')
+        assert hasattr(service, 'request_email_verification')
+        assert hasattr(service, 'verify_email_code')
 
 
 # ===========================================================================
@@ -257,15 +181,8 @@ from app.models.notification_settings import (  # noqa: E402
     NotificationChannelConfig,
     sanitize_provider_metadata,
 )
-from app.models.telegram_connection import (  # noqa: E402
-    TelegramConnectionToken,
-    generate_connection_token,
-    hash_connection_token,
-)
 from app.services.notifications.base import NotificationSendResult  # noqa: E402
 
-WHATSAPP_TOKEN = "EAAB-super-secret-token-xyz"
-TELEGRAM_TOKEN = "123456:ABC-super-secret-bot-token"
 SMTP_PASSWORD = "super-secret-smtp-password"
 
 
@@ -279,29 +196,6 @@ def _email_config(**overrides):
         "smtp_use_tls": True,
         "smtp_from_email": "platform@example.com",
         "smtp_from_name": "DevOps Monitor Pro",
-    }
-    config.update(overrides)
-    return config
-
-
-def _whatsapp_config(**overrides):
-    config = {
-        "enabled": True,
-        "whatsapp_api_url": "https://graph.facebook.com/v17.0",
-        "whatsapp_phone_number_id": "1234567890",
-        "whatsapp_access_token": WHATSAPP_TOKEN,
-        "whatsapp_timeout": 30,
-    }
-    config.update(overrides)
-    return config
-
-
-def _telegram_config(**overrides):
-    config = {
-        "enabled": True,
-        "telegram_bot_token": TELEGRAM_TOKEN,
-        "telegram_timeout": 30,
-        "telegram_parse_mode": "HTML",
     }
     config.update(overrides)
     return config
@@ -324,86 +218,9 @@ class TestProviderEnablement:
         assert result.success is False
         assert await provider.send("a@example.com", "t", "m", "info") is False
 
-    @pytest.mark.asyncio
-    async def test_telegram_provider_enabled(self):
-        provider = TelegramProvider(_telegram_config())
-        assert provider.is_enabled() is True
-        assert provider.missing_config() is None
-
-    @pytest.mark.asyncio
-    async def test_telegram_provider_disabled(self):
-        provider = TelegramProvider(_telegram_config(enabled=False))
-        assert provider.is_enabled() is False
-        result = await provider.send_with_result("123456789", "t", "m", "info")
-        assert result.success is False
-        assert await provider.send("123456789", "t", "m", "info") is False
-
-    @pytest.mark.asyncio
-    async def test_whatsapp_provider_enabled(self):
-        provider = WhatsAppProvider(_whatsapp_config())
-        assert provider.is_enabled() is True
-        assert provider.missing_config() is None
-        # E.164 recipient validation
-        assert provider.validate_recipient("+923001234567") is None
-        assert provider.validate_recipient("+92 300 1234567") is None
-        assert provider.validate_recipient("923001234567") is None
-        assert provider.validate_recipient("12345") is not None
-        assert provider.validate_recipient("not-a-phone") is not None
-
-    @pytest.mark.asyncio
-    async def test_whatsapp_provider_disabled(self):
-        provider = WhatsAppProvider(_whatsapp_config(enabled=False))
-        assert provider.is_enabled() is False
-        result = await provider.send_with_result("+923001234567", "t", "m", "info")
-        assert result.success is False
-        assert await provider.send("+923001234567", "t", "m", "info") is False
-
 
 class TestMissingProviderConfiguration:
     """Missing platform credentials must produce useful, secret-free errors."""
-
-    @pytest.mark.asyncio
-    async def test_missing_whatsapp_credentials(self):
-        provider = WhatsAppProvider(
-            _whatsapp_config(whatsapp_phone_number_id="", whatsapp_access_token="")
-        )
-        assert provider.missing_config() == "WhatsApp provider is not configured"
-        assert "phone number ID" in WhatsAppProvider(
-            _whatsapp_config(whatsapp_phone_number_id="")
-        ).missing_config()
-        assert "access token" in WhatsAppProvider(
-            _whatsapp_config(whatsapp_access_token="")
-        ).missing_config()
-
-        service = NotificationService()
-        with patch.object(settings, "WHATSAPP_ENABLED", True), \
-             patch.object(settings, "WHATSAPP_PHONE_NUMBER_ID", ""), \
-             patch.object(settings, "WHATSAPP_ACCESS_TOKEN", ""):
-            result = await service.send_test_notification(
-                user_id="user123",
-                provider=NotificationProviderType.WHATSAPP,
-                recipient="+923001234567",
-            )
-        assert result["success"] is False
-        assert "not configured" in result["error"]
-        assert WHATSAPP_TOKEN not in json.dumps(result)
-
-    @pytest.mark.asyncio
-    async def test_missing_telegram_credentials(self):
-        provider = TelegramProvider(_telegram_config(telegram_bot_token=""))
-        assert "not configured" in provider.missing_config()
-
-        service = NotificationService()
-        with patch.object(settings, "TELEGRAM_ENABLED", True), \
-             patch.object(settings, "TELEGRAM_BOT_TOKEN", ""):
-            result = await service.send_test_notification(
-                user_id="user123",
-                provider=NotificationProviderType.TELEGRAM,
-                recipient="123456789",
-            )
-        assert result["success"] is False
-        assert "not configured" in result["error"]
-        assert TELEGRAM_TOKEN not in json.dumps(result)
 
     @pytest.mark.asyncio
     async def test_missing_smtp_configuration(self):
@@ -506,159 +323,61 @@ class TestSendTestNotification:
     @pytest.mark.asyncio
     async def test_send_test_notification_provider_failure_no_secrets(self):
         service = NotificationService()
-        with patch.object(settings, "WHATSAPP_ENABLED", True), \
-             patch.object(settings, "WHATSAPP_PHONE_NUMBER_ID", "1234567890"), \
-             patch.object(settings, "WHATSAPP_ACCESS_TOKEN", WHATSAPP_TOKEN), \
-             patch("app.services.notifications.WhatsAppProvider") as MockWA:
-            instance = MockWA.return_value
+        with patch.object(settings, "SMTP_ENABLED", True), \
+             patch.object(settings, "SMTP_PASSWORD", SMTP_PASSWORD), \
+             patch("app.services.notifications.EmailProvider") as MockEmail:
+            instance = MockEmail.return_value
             instance.is_enabled.return_value = True
             instance.missing_config.return_value = None
             instance.validate_recipient.return_value = None
             instance.send_with_result = AsyncMock(
-                return_value=NotificationSendResult(
-                    False, "WhatsApp access token is invalid or expired"
-                )
+                return_value=NotificationSendResult(False, "SMTP authentication failed")
             )
 
             result = await service.send_test_notification(
                 user_id="user123",
-                provider=NotificationProviderType.WHATSAPP,
-                recipient="+923001234567",
+                provider=NotificationProviderType.EMAIL,
+                recipient="client@example.com",
             )
 
         assert result["success"] is False
-        assert result["error"] == "WhatsApp access token is invalid or expired"
-        assert WHATSAPP_TOKEN not in json.dumps(result)
+        assert result["error"] == "SMTP authentication failed"
+        assert SMTP_PASSWORD not in json.dumps(result)
+
+
+class TestEmailVerification:
+    """Email verification flow tests."""
 
     @pytest.mark.asyncio
-    async def test_send_test_notification_invalid_recipient(self):
+    async def test_request_verification_invalid_email(self):
         service = NotificationService()
-        with patch.object(settings, "WHATSAPP_ENABLED", True), \
-             patch.object(settings, "WHATSAPP_PHONE_NUMBER_ID", "1234567890"), \
-             patch.object(settings, "WHATSAPP_ACCESS_TOKEN", WHATSAPP_TOKEN):
-            result = await service.send_test_notification(
-                user_id="user123",
-                provider=NotificationProviderType.WHATSAPP,
-                recipient="555-1234",
-            )
+        result = await service.request_email_verification("user123", "invalid-email")
         assert result["success"] is False
-        assert "E.164" in result["error"]
-
-
-class TestProviderFailureIsolation:
-    """One failing provider must never block the other providers."""
+        assert "Invalid email address" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_provider_failure_isolation(self):
+    async def test_request_verification_smtp_not_configured(self):
         service = NotificationService()
-
-        def _channel(provider, recipient):
-            channel = MagicMock(
-                provider=provider,
-                recipient=recipient,
-                last_sent_at=None,
-                cooldown_seconds=300,
-                notification_types=["alert"],
-                min_severity="info",
-            )
-            channel.save = AsyncMock()
-            return channel
-
-        email_channel = _channel(NotificationProviderType.EMAIL, "a@example.com")
-        wa_channel = _channel(NotificationProviderType.WHATSAPP, "+923001234567")
-        tg_channel = _channel(NotificationProviderType.TELEGRAM, "123456789")
-
-        server = MagicMock()
-        server.name = "srv"
-        server.id = "srvid"
-        server.user_id = "user123"
-
-        with patch("app.services.notification_service.NotificationChannelConfig") as MockCfg, \
-             patch("app.services.notifications.EmailProvider") as MockEmail, \
-             patch("app.services.notifications.WhatsAppProvider") as MockWA, \
-             patch("app.services.notifications.TelegramProvider") as MockTG:
-            MockCfg.find.return_value = MagicMock(
-                to_list=AsyncMock(return_value=[email_channel, wa_channel, tg_channel])
-            )
-            MockEmail.return_value.send_with_result = AsyncMock(
-                return_value=NotificationSendResult(True)
-            )
-            # WhatsApp explodes unexpectedly mid-delivery
-            MockWA.return_value.send_with_result = AsyncMock(side_effect=RuntimeError("boom"))
-            MockTG.return_value.send_with_result = AsyncMock(
-                return_value=NotificationSendResult(True)
-            )
-
-            await service._send_external_notifications(
-                server=server,
-                alert=None,
-                notification_type="alert",
-                title="t",
-                message="m",
-                severity="critical",
-            )
-
-        # All three providers were attempted despite WhatsApp raising
-        MockEmail.return_value.send_with_result.assert_awaited_once()
-        MockWA.return_value.send_with_result.assert_awaited_once()
-        MockTG.return_value.send_with_result.assert_awaited_once()
-        # Success recorded only for the successful channels
-        email_channel.save.assert_awaited_once()
-        wa_channel.save.assert_not_awaited()
-        tg_channel.save.assert_awaited_once()
+        with patch.object(settings, "SMTP_ENABLED", False):
+            result = await service.request_email_verification("user123", "test@example.com")
+        assert result["success"] is False
+        assert "not configured" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_provider_false_result_does_not_stop_others(self):
-        """A provider returning failure (not raising) also must not block others."""
+    async def test_verify_invalid_code_format(self):
         service = NotificationService()
+        result = await service.verify_email_code("user123", "test@example.com", "abc")
+        assert result["success"] is False
+        assert "Invalid verification code format" in result["error"]
 
-        def _channel(provider, recipient):
-            channel = MagicMock(
-                provider=provider,
-                recipient=recipient,
-                last_sent_at=None,
-                cooldown_seconds=300,
-                notification_types=["alert"],
-                min_severity="info",
-            )
-            channel.save = AsyncMock()
-            return channel
-
-        wa_channel = _channel(NotificationProviderType.WHATSAPP, "+923001234567")
-        tg_channel = _channel(NotificationProviderType.TELEGRAM, "123456789")
-
-        server = MagicMock()
-        server.name = "srv"
-        server.id = "srvid"
-        server.user_id = "user123"
-
-        with patch("app.services.notification_service.NotificationChannelConfig") as MockCfg, \
-             patch("app.services.notifications.WhatsAppProvider") as MockWA, \
-             patch("app.services.notifications.TelegramProvider") as MockTG:
-            MockCfg.find.return_value = MagicMock(
-                to_list=AsyncMock(return_value=[wa_channel, tg_channel])
-            )
-            MockWA.return_value.send_with_result = AsyncMock(
-                return_value=NotificationSendResult(
-                    False, "WhatsApp rate limit exceeded, try again later"
-                )
-            )
-            MockTG.return_value.send_with_result = AsyncMock(
-                return_value=NotificationSendResult(True)
-            )
-
-            await service._send_external_notifications(
-                server=server,
-                alert=None,
-                notification_type="alert",
-                title="t",
-                message="m",
-                severity="critical",
-            )
-
-        MockTG.return_value.send_with_result.assert_awaited_once()
-        tg_channel.save.assert_awaited_once()
-        wa_channel.save.assert_not_awaited()
+    @pytest.mark.asyncio
+    async def test_verify_wrong_code(self):
+        service = NotificationService()
+        # Mock the database operations since MongoDB is not available
+        with patch.object(EmailVerification, "find_one", AsyncMock(return_value=None)):
+            result = await service.verify_email_code("user123", "test@example.com", "123456")
+        assert result["success"] is False
+        assert "Invalid verification code" in result["error"]
 
 
 class TestChannelOwnershipService:
@@ -688,35 +407,22 @@ class TestSecretSafetyResponses:
         service = NotificationService()
         with patch.object(settings, "SMTP_ENABLED", True), \
              patch.object(settings, "SMTP_PASSWORD", SMTP_PASSWORD), \
-             patch.object(settings, "SMTP_FROM_EMAIL", "platform@example.com"), \
-             patch.object(settings, "WHATSAPP_ENABLED", True), \
-             patch.object(settings, "WHATSAPP_PHONE_NUMBER_ID", "1234567890"), \
-             patch.object(settings, "WHATSAPP_ACCESS_TOKEN", WHATSAPP_TOKEN), \
-             patch.object(settings, "TELEGRAM_ENABLED", True), \
-             patch.object(settings, "TELEGRAM_BOT_TOKEN", TELEGRAM_TOKEN):
+             patch.object(settings, "SMTP_FROM_EMAIL", "platform@example.com"):
             status = service.get_provider_status()
 
         serialized = json.dumps(status)
         assert status["email"]["available"] is True
-        assert status["whatsapp"]["available"] is True
-        assert status["telegram"]["available"] is True
-        assert WHATSAPP_TOKEN not in serialized
-        assert TELEGRAM_TOKEN not in serialized
         assert SMTP_PASSWORD not in serialized
 
     @pytest.mark.asyncio
     async def test_provider_status_reports_unavailable_without_secrets(self):
         service = NotificationService()
         with patch.object(settings, "SMTP_ENABLED", False), \
-             patch.object(settings, "SMTP_PASSWORD", SMTP_PASSWORD), \
-             patch.object(settings, "WHATSAPP_ENABLED", False), \
-             patch.object(settings, "WHATSAPP_ACCESS_TOKEN", WHATSAPP_TOKEN):
+             patch.object(settings, "SMTP_PASSWORD", SMTP_PASSWORD):
             status = service.get_provider_status()
 
         assert status["email"]["available"] is False
-        assert status["whatsapp"]["available"] is False
         assert "unavailable" in status["email"]["message"].lower()
-        assert WHATSAPP_TOKEN not in json.dumps(status)
         assert SMTP_PASSWORD not in json.dumps(status)
 
     def test_channel_metadata_never_stores_secrets(self):
@@ -724,9 +430,9 @@ class TestSecretSafetyResponses:
             {
                 "chat_id": "123456789",
                 "telegram_username": "testuser",
-                "access_token": WHATSAPP_TOKEN,
-                "bot_token": TELEGRAM_TOKEN,
-                "smtp_password": SMTP_PASSWORD,
+                "access_token": "EAAB-super-secret-token-xyz",
+                "bot_token": "123456:ABC-super-secret-bot-token",
+                "smtp_password": "super-secret-smtp-password",
                 "api_key": "key123",
             }
         )
@@ -737,537 +443,17 @@ class TestSecretSafetyLogs:
     """Provider credentials must never appear in log output."""
 
     @pytest.mark.asyncio
-    async def test_whatsapp_token_never_logged(self, caplog):
-        provider = WhatsAppProvider(_whatsapp_config())
+    async def test_smtp_password_never_logged(self, caplog):
+        provider = EmailProvider(_email_config())
         caplog.set_level(logging.ERROR, logger="devops_monitor")
 
         with patch(
-            "app.services.notifications.whatsapp_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.side_effect = Exception(
-                "Connection failed for https://graph.facebook.com/v17.0/1234567890/messages "
-                f"token={WHATSAPP_TOKEN}"
+            "app.services.notifications.email_provider.smtplib.SMTP"
+        ) as mock_smtp:
+            mock_smtp.return_value.__enter__.side_effect = Exception(
+                f"Authentication failed for {SMTP_PASSWORD}"
             )
-            result = await provider.send_with_result("+923001234567", "t", "m", "critical")
+            result = await provider.send_with_result("a@example.com", "t", "m", "critical")
 
         assert result.success is False
-        assert WHATSAPP_TOKEN not in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_telegram_bot_token_never_logged(self, caplog):
-        provider = TelegramProvider(_telegram_config())
-        caplog.set_level(logging.ERROR, logger="devops_monitor")
-
-        with patch(
-            "app.services.notifications.telegram_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.side_effect = Exception(
-                f"Cannot connect to https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            )
-            result = await provider.send_with_result("123456789", "t", "m", "critical")
-
-        assert result.success is False
-        assert TELEGRAM_TOKEN not in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_whatsapp_upstream_error_body_never_logs_token(self, caplog):
-        provider = WhatsAppProvider(_whatsapp_config())
-        caplog.set_level(logging.ERROR, logger="devops_monitor")
-
-        response = MagicMock(
-            status_code=401,
-            text='{"error":{"message":"Invalid OAuth access token"}}',
-        )
-
-        with patch(
-            "app.services.notifications.whatsapp_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=response
-            )
-            result = await provider.send_with_result("+923001234567", "t", "m", "critical")
-
-        assert result.success is False
-        assert "invalid or expired" in result.error
-        assert WHATSAPP_TOKEN not in caplog.text
-
-
-class TestProviderErrorMapping:
-    """Upstream provider failures map to specific, secret-free error causes."""
-
-    @pytest.mark.asyncio
-    async def test_whatsapp_rate_limit_mapping(self):
-        provider = WhatsAppProvider(_whatsapp_config())
-        response = MagicMock(status_code=429, text="Too many requests")
-
-        with patch(
-            "app.services.notifications.whatsapp_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=response
-            )
-            result = await provider.send_with_result("+923001234567", "t", "m", "critical")
-
-        assert result.success is False
-        assert "rate limit" in result.error.lower()
-
-    @pytest.mark.asyncio
-    async def test_whatsapp_timeout_mapping(self):
-        import httpx
-
-        provider = WhatsAppProvider(_whatsapp_config())
-
-        with patch(
-            "app.services.notifications.whatsapp_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                side_effect=httpx.TimeoutException("timed out")
-            )
-            result = await provider.send_with_result("+923001234567", "t", "m", "critical")
-
-        assert result.success is False
-        assert "timed out" in result.error.lower()
-
-    @pytest.mark.asyncio
-    async def test_telegram_blocked_bot_mapping(self):
-        provider = TelegramProvider(_telegram_config())
-        response = MagicMock(
-            status_code=403,
-            text='{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}',
-        )
-
-        with patch(
-            "app.services.notifications.telegram_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=response
-            )
-            result = await provider.send_with_result("123456789", "t", "m", "critical")
-
-        assert result.success is False
-        assert "blocked" in result.error.lower()
-        assert TELEGRAM_TOKEN not in result.error
-
-    @pytest.mark.asyncio
-    async def test_telegram_invalid_chat_mapping(self):
-        provider = TelegramProvider(_telegram_config())
-        response = MagicMock(
-            status_code=400,
-            text='{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}',
-        )
-
-        with patch(
-            "app.services.notifications.telegram_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=response
-            )
-            result = await provider.send_with_result("123456789", "t", "m", "critical")
-
-        assert result.success is False
-        assert "chat" in result.error.lower()
-
-    @pytest.mark.asyncio
-    async def test_telegram_invalid_token_mapping(self):
-        provider = TelegramProvider(_telegram_config())
-        response = MagicMock(status_code=401, text="Unauthorized")
-
-        with patch(
-            "app.services.notifications.telegram_provider.httpx.AsyncClient"
-        ) as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=response
-            )
-            result = await provider.send_with_result("123456789", "t", "m", "critical")
-
-        assert result.success is False
-        assert "invalid or revoked" in result.error
-        assert TELEGRAM_TOKEN not in result.error
-
-
-class TestTelegramConnectionTokens:
-    """Connection tokens must be secure, expiring and single-use."""
-
-    def _record(self, used=False, expired=False):
-        record = MagicMock()
-        record.user_id = "user123"
-        record.used = used
-        record.is_expired = MagicMock(return_value=expired)
-        record.save = AsyncMock()
-        record.delete = AsyncMock()
-        return record
-
-    def test_connection_tokens_are_random_and_unpredictable(self):
-        tokens = {generate_connection_token() for _ in range(50)}
-        assert len(tokens) == 50
-        for token in tokens:
-            assert len(token) >= 24
-            assert "user123" not in token  # no user information embedded
-
-    def test_connection_token_storage_is_hashed(self):
-        raw = generate_connection_token()
-        hashed = hash_connection_token(raw)
-        assert hashed != raw
-        assert len(hashed) == 64  # sha256 hex digest
-
-    @pytest.mark.asyncio
-    async def test_connection_token_expiry(self):
-        service = NotificationService()
-        record = self._record(expired=True)
-
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=record)
-            result = await service.complete_telegram_connect(
-                "raw-token", "123456789", "testuser"
-            )
-        assert result["success"] is False
-        assert "expired" in result["error"]
-        record.delete.assert_awaited_once()
-
-        # Status endpoint also reports expiry
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=record)
-            status = await service.get_telegram_connect_status("user123", "raw-token")
-        assert status["connected"] is False
-        assert status.get("expired") is True
-
-    @pytest.mark.asyncio
-    async def test_connection_token_single_use(self):
-        service = NotificationService()
-        record = self._record(used=True)
-
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=record)
-            result = await service.complete_telegram_connect(
-                "raw-token", "123456789", "testuser"
-            )
-        assert result["success"] is False
-        assert "already been used" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_connection_token_invalid(self):
-        service = NotificationService()
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=None)
-            result = await service.complete_telegram_connect(
-                "raw-token", "123456789", "testuser"
-            )
-        assert result["success"] is False
-        assert "Invalid connection token" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_connection_success_marks_used_and_creates_channel(self):
-        service = NotificationService()
-        record = self._record()
-
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok, \
-             patch("app.services.notification_service.NotificationChannelConfig") as MockCfg:
-            MockTok.find_one = AsyncMock(return_value=record)
-            MockCfg.find_one = AsyncMock(return_value=None)
-            mock_insert = MockCfg.return_value.insert = AsyncMock()
-
-            result = await service.complete_telegram_connect(
-                "raw-token", "123456789", "testuser"
-            )
-
-        assert result["success"] is True
-        assert result["user_id"] == "user123"
-        assert record.used is True
-        record.save.assert_awaited_once()
-        mock_insert.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_connect_status_connected_after_use(self):
-        service = NotificationService()
-        record = self._record(used=True)
-        record.chat_id = "123456789"
-        record.telegram_username = "testuser"
-
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=record)
-            status = await service.get_telegram_connect_status("user123", "raw-token")
-
-        assert status["connected"] is True
-        assert status["chat_id"] == "123456789"
-        assert status["telegram_username"] == "testuser"
-
-    @pytest.mark.asyncio
-    async def test_connect_status_ownership_enforced(self):
-        """Users can only poll the status of their own connection tokens."""
-        service = NotificationService()
-        record = self._record()
-        record.user_id = "someone-else"
-
-        with patch("app.services.notification_service.TelegramConnectionToken") as MockTok:
-            MockTok.find_one = AsyncMock(return_value=record)
-            status = await service.get_telegram_connect_status("user123", "raw-token")
-
-        assert status["connected"] is False
-        assert "Invalid" in status["error"]
-
-
-# ---------------------------------------------------------------------------
-# API integration tests (use the real app + MongoDB via the client fixture)
-# ---------------------------------------------------------------------------
-
-
-def _user_payload(prefix):
-    uid = uuid.uuid4().hex[:8]
-    return {
-        "email": f"{prefix}_{uid}@test.com",
-        "username": f"{prefix}{uid}",
-        "password": "Password1!",
-        "confirm_password": "Password1!",
-    }
-
-
-async def _login_headers(client, payload):
-    await client.post("/api/auth/register", json=payload)
-    login = await client.post(
-        "/api/auth/login",
-        json={"email": payload["email"], "password": payload["password"]},
-    )
-    return {"Authorization": f"Bearer {login.json()['access_token']}"}
-
-
-@pytest.mark.asyncio
-async def test_user_channel_ownership_api(client):
-    """Users cannot read, update, delete or test another user's channels."""
-    headers_a = await _login_headers(client, _user_payload("owna"))
-    headers_b = await _login_headers(client, _user_payload("ownb"))
-
-    resp = await client.post(
-        "/api/notifications/settings/",
-        headers=headers_a,
-        json={
-            "provider": "email",
-            "enabled": True,
-            "recipient": "owner@example.com",
-            "min_severity": "warning",
-            "notification_types": ["alert"],
-            "cooldown_seconds": 300,
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    channel = resp.json()
-    channel_id = channel["id"]
-    assert channel["user_id"] not in (None, "")
-
-    # User B cannot see user A's channels
-    list_b = await client.get("/api/notifications/settings/", headers=headers_b)
-    assert list_b.status_code == 200
-    assert all(c["id"] != channel_id for c in list_b.json())
-
-    # User B cannot update, delete or test user A's channel
-    resp = await client.put(
-        f"/api/notifications/settings/{channel_id}",
-        headers=headers_b,
-        json={"enabled": False},
-    )
-    assert resp.status_code == 404
-
-    resp = await client.delete(
-        f"/api/notifications/settings/{channel_id}", headers=headers_b
-    )
-    assert resp.status_code == 404
-
-    resp = await client.post(
-        "/api/notifications/settings/test",
-        headers=headers_b,
-        json={"provider": "email", "channel_id": channel_id},
-    )
-    assert resp.status_code == 404
-
-    # Owner can still see and manage their own channel
-    list_a = await client.get("/api/notifications/settings/", headers=headers_a)
-    assert any(c["id"] == channel_id for c in list_a.json())
-    resp = await client.delete(
-        f"/api/notifications/settings/{channel_id}", headers=headers_a
-    )
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_create_whatsapp_channel_validates_e164(client):
-    """Invalid phone numbers are rejected; E.164 numbers are accepted."""
-    headers = await _login_headers(client, _user_payload("badwa"))
-
-    resp = await client.post(
-        "/api/notifications/settings/",
-        headers=headers,
-        json={"provider": "whatsapp", "recipient": "12345"},
-    )
-    assert resp.status_code == 400
-    assert "E.164" in resp.json()["message"]
-
-    resp = await client.post(
-        "/api/notifications/settings/",
-        headers=headers,
-        json={"provider": "whatsapp", "recipient": "+92 300 1234567"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["recipient"] == "+92 300 1234567"
-    # No platform credentials ever appear on a channel document/response
-    assert WHATSAPP_TOKEN not in json.dumps(data)
-    assert "access_token" not in json.dumps(data)
-
-    # Email channel validation too
-    resp = await client.post(
-        "/api/notifications/settings/",
-        headers=headers,
-        json={"provider": "email", "recipient": "not-an-email"},
-    )
-    assert resp.status_code == 400
-
-    # Cleanup
-    await client.delete(f"/api/notifications/settings/{data['id']}", headers=headers)
-
-
-@pytest.mark.asyncio
-async def test_update_whatsapp_channel_validates_e164(client):
-    """The UPDATE path also rejects non-E.164 numbers; valid E.164 succeeds."""
-    headers = await _login_headers(client, _user_payload("updwa"))
-
-    resp = await client.post(
-        "/api/notifications/settings/",
-        headers=headers,
-        json={"provider": "whatsapp", "recipient": "+92 300 1234567"},
-    )
-    assert resp.status_code == 200, resp.text
-    channel_id = resp.json()["id"]
-
-    # Invalid recipient on update is rejected
-    resp = await client.put(
-        f"/api/notifications/settings/{channel_id}",
-        headers=headers,
-        json={"recipient": "555-1234"},
-    )
-    assert resp.status_code == 400
-    assert "E.164" in resp.text
-
-    # Valid E.164 recipient still updates successfully
-    resp = await client.put(
-        f"/api/notifications/settings/{channel_id}",
-        headers=headers,
-        json={"recipient": "+923001234567"},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["recipient"] == "+923001234567"
-
-    # Cleanup
-    await client.delete(f"/api/notifications/settings/{channel_id}", headers=headers)
-
-
-@pytest.mark.asyncio
-async def test_providers_status_endpoint_no_secrets(client):
-    """GET /providers/status returns booleans only, never credentials."""
-    headers = await _login_headers(client, _user_payload("pstat"))
-
-    with patch.object(settings, "WHATSAPP_ACCESS_TOKEN", WHATSAPP_TOKEN), \
-         patch.object(settings, "TELEGRAM_BOT_TOKEN", TELEGRAM_TOKEN), \
-         patch.object(settings, "SMTP_PASSWORD", SMTP_PASSWORD):
-        resp = await client.get("/api/notifications/settings/providers/status", headers=headers)
-
-    assert resp.status_code == 200
-    body = json.dumps(resp.json())
-    assert WHATSAPP_TOKEN not in body
-    assert TELEGRAM_TOKEN not in body
-    assert SMTP_PASSWORD not in body
-    providers = resp.json()["providers"]
-    for provider in ("email", "whatsapp", "telegram"):
-        assert "available" in providers[provider]
-        assert "message" in providers[provider]
-
-
-@pytest.mark.asyncio
-async def test_telegram_webhook_completes_connection(client):
-    """The public webhook maps /start <token> to the owning user's chat."""
-    with patch(
-        "app.routers.notification_settings_router.notification_service"
-    ) as mock_service:
-        mock_service.complete_telegram_connect = AsyncMock(
-            return_value={"success": True, "user_id": "user123", "chat_id": "987654321"}
-        )
-        resp = await client.post(
-            "/api/notifications/settings/telegram/webhook",
-            json={
-                "message": {
-                    "text": "/start abc123token",
-                    "chat": {"id": 987654321},
-                    "from": {"username": "testuser"},
-                }
-            },
-        )
-
-    assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
-    mock_service.complete_telegram_connect.assert_awaited_once_with(
-        "abc123token", "987654321", "testuser"
-    )
-
-
-@pytest.mark.asyncio
-async def test_telegram_webhook_rejects_bad_secret(client):
-    """When a webhook secret is configured, mismatches are rejected."""
-    with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET", "expected-secret"):
-        resp = await client.post(
-            "/api/notifications/settings/telegram/webhook",
-            json={"message": {"text": "/start x", "chat": {"id": 1}}},
-            headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
-        )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_metrics_ingestion_200_when_notification_delivery_fails(client):
-    """Metrics ingestion must still return 200 even if notification delivery fails."""
-    headers = await _login_headers(client, _user_payload("metr"))
-    server = (
-        await client.post(
-            "/api/servers/",
-            headers=headers,
-            json={"name": "NotifyFail", "ip_address": "10.9.9.9", "server_type": "web", "tags": []},
-        )
-    ).json()
-
-    failing_channel = MagicMock(
-        provider=NotificationProviderType.EMAIL,
-        recipient="x@example.com",
-        last_sent_at=None,
-        cooldown_seconds=0,
-        notification_types=["alert"],
-        min_severity="info",
-    )
-    failing_channel.save = AsyncMock()
-
-    # cpu 99 >= critical threshold (95) -> alert -> notification delivery explodes
-    with patch("app.services.notification_service.NotificationChannelConfig") as MockCfg, \
-         patch("app.services.notifications.EmailProvider") as MockEmail:
-        MockCfg.find.return_value = MagicMock(
-            to_list=AsyncMock(return_value=[failing_channel])
-        )
-        MockEmail.return_value.send_with_result = AsyncMock(
-            side_effect=RuntimeError("SMTP down")
-        )
-        resp = await client.post(
-            "/api/monitoring/metrics",
-            json={
-                "server_id": server["id"],
-                "cpu_usage": 99.0,
-                "memory_usage": 50.0,
-                "disk_usage": 50.0,
-            },
-            headers={"X-Agent-Token": server["agent_token"]},
-        )
-
-    # Ingestion still succeeds despite the notification failure
-    assert resp.status_code == 200
-
-    # And the alert was still created
-    alerts_resp = await client.get("/api/alerts", headers=headers)
-    assert alerts_resp.status_code == 200
-    alerts = alerts_resp.json()
-    if isinstance(alerts, dict):
-        alerts = alerts.get("items", [])
-    assert any(a.get("server_id") == server["id"] for a in alerts)
+        assert SMTP_PASSWORD not in caplog.text

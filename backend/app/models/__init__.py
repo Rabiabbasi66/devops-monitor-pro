@@ -8,7 +8,7 @@ from .agent_enrollment import AgentEnrollment
 from .notification_settings import NotificationChannelConfig, NotificationProviderType
 from .alert_rule import AlertRule, AlertRuleOperator, AlertRuleMetricType
 from .incident import Incident, IncidentStatus, IncidentSeverity
-from .telegram_connection import TelegramConnectionToken
+from .email_verification import EmailVerification
 
 MODELS = [
     User,
@@ -21,7 +21,7 @@ MODELS = [
     NotificationChannelConfig,
     AlertRule,
     Incident,
-    TelegramConnectionToken,
+    EmailVerification,
 ]
 
 __all__ = [
@@ -48,6 +48,6 @@ __all__ = [
     "Incident",
     "IncidentStatus",
     "IncidentSeverity",
-    "TelegramConnectionToken",
+    "EmailVerification",
     "MODELS",
 ]
