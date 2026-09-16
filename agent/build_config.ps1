@@ -31,7 +31,7 @@ $ApiUrl = "https://devops-monitor-pro.vercel.app/api"
 # -----------------------------------------------------------------------------
 # Installer metadata (shows in Windows "Apps & Features" and the setup wizard)
 # -----------------------------------------------------------------------------
-$AppVersion      = "2.1.0"
+$AppVersion      = "1.0.0"
 $AppPublisher    = "DevOps Monitor Pro"
 $AppPublisherUrl = "https://github.com/Rabiabbasi66/devops-monitor-pro"
 

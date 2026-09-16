@@ -49,7 +49,7 @@ if ($ApiUrl -match "localhost|127\.0\.0\.1") {
     throw "Refusing to build: localhost API URLs must never ship to clients."
 }
 
-$AppVersion = if (Get-Variable -Name "AppVersion" -Scope Script -ErrorAction SilentlyContinue) { $script:AppVersion } else { "2.1.0" }
+$AppVersion = if (Get-Variable -Name "AppVersion" -Scope Script -ErrorAction SilentlyContinue) { $script:AppVersion } else { "1.0.0" }
 
 Write-Host "== DevOps Monitor Pro agent build ==" -ForegroundColor Cyan
 Write-Host "API URL:   $ApiUrl"

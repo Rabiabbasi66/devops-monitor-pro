@@ -33,7 +33,7 @@ from credentials_file import load_credentials, save_credentials
 
 logger = logging.getLogger("monitoring-agent")
 
-AGENT_VERSION = "2.1.0"
+AGENT_VERSION = "1.0.0"
 
 DEFAULT_INTERVAL_SECONDS = 30
 CONNECT_TIMEOUT = 10
