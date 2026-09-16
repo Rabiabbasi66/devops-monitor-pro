@@ -70,6 +70,9 @@ class EmailVerificationVerifyRequest(BaseModel):
 
 class EmailVerificationResponse(BaseModel):
     success: bool
-    message: str
+    # Failure results carry only "error" (no message); making message optional
+    # lets real provider/validation failures return as 200 + success=false with
+    # the sanitized error instead of a FastAPI ResponseValidationError (500).
+    message: Optional[str] = None
     verified: Optional[bool] = None
     error: Optional[str] = None

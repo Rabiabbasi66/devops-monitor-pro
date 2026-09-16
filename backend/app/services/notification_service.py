@@ -447,10 +447,12 @@ class NotificationService:
         # Check if SMTP is configured
         self._get_providers()
         email_config = self._provider_configs.get(NotificationProviderType.EMAIL, {})
-        email_provider = self._providers.get(NotificationProviderType.EMAIL)
+        email_provider_class = self._providers.get(NotificationProviderType.EMAIL)
+        # Instantiate the provider BEFORE sending: _providers maps provider type
+        # -> CLASS, so the send call below must run on a real instance.
+        email_provider = email_provider_class(email_config) if email_provider_class else None
         if not email_provider or not email_config.get("enabled", False):
-            provider_instance = email_provider(email_config) if email_provider else None
-            missing = provider_instance.missing_config() if provider_instance else "Email provider not available"
+            missing = email_provider.missing_config() if email_provider else "Email provider not available"
             return {"success": False, "error": missing or "Email provider is not configured"}
 
         # Delete any existing unused verification codes for this user/email

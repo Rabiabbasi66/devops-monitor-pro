@@ -379,6 +379,81 @@ class TestEmailVerification:
         assert result["success"] is False
         assert "Invalid verification code" in result["error"]
 
+    @pytest.mark.asyncio
+    async def test_request_verification_smtp_enabled_invokes_provider_instance(self):
+        """SMTP-enabled request path must send via a real provider INSTANCE.
+
+        Regression test: request_email_verification() used to call
+        send_with_result() on the provider CLASS (self._providers maps type ->
+        class), which raised TypeError (HTTP 500) on every request once SMTP
+        was enabled. The mock provider makes that regression deterministic:
+        success is only possible if the service awaited send_with_result() on
+        the instance it constructed, and find(...).delete_many()/insert() are
+        mocked so no MongoDB connection is required.
+        """
+        service = NotificationService()
+        with patch.object(settings, "SMTP_ENABLED", True), \
+             patch("app.services.notification_service.generate_verification_code", return_value="654321"), \
+             patch("app.services.notifications.EmailProvider") as MockEmail, \
+             patch("app.services.notification_service.EmailVerification") as MockEV:
+            MockEV.find.return_value.delete_many = AsyncMock()
+            record = MockEV.return_value
+            record.insert = AsyncMock()
+            instance = MockEmail.return_value
+            instance.is_enabled.return_value = True
+            instance.missing_config.return_value = None
+            instance.send_with_result = AsyncMock(return_value=NotificationSendResult(True))
+
+            result = await service.request_email_verification(
+                "user123", "client@example.com"
+            )
+
+        # The provider instance was actually invoked and reported success.
+        instance.send_with_result.assert_awaited_once()
+        assert instance.send_with_result.await_args.kwargs["recipient"] == "client@example.com"
+        assert instance.send_with_result.await_args.kwargs["message"].startswith(
+            "Your verification code is:"
+        )
+        assert result["success"] is True
+        assert result["message"] == "Verification code sent to your email"
+        # The raw code ("654321") must never leak into the API response.
+        assert "654321" not in json.dumps(result)
+        # The verification record was persisted with a hash (never the raw code).
+        record.insert.assert_awaited_once()
+        assert MockEV.call_args.kwargs["user_id"] == "user123"
+        assert MockEV.call_args.kwargs["email"] == "client@example.com"
+        code_hash = MockEV.call_args.kwargs["code_hash"]
+        assert code_hash and len(code_hash) == 64  # sha256 hex digest
+        assert code_hash != "654321"
+
+    @pytest.mark.asyncio
+    async def test_request_verification_provider_failure_returns_failure(self):
+        """Provider failure must return failure (record cleaned up), never fake success."""
+        service = NotificationService()
+        with patch.object(settings, "SMTP_ENABLED", True), \
+             patch("app.services.notifications.EmailProvider") as MockEmail, \
+             patch("app.services.notification_service.EmailVerification") as MockEV:
+            MockEV.find.return_value.delete_many = AsyncMock()
+            record = MockEV.return_value
+            record.insert = AsyncMock()
+            record.delete = AsyncMock()
+            instance = MockEmail.return_value
+            instance.is_enabled.return_value = True
+            instance.missing_config.return_value = None
+            instance.send_with_result = AsyncMock(
+                return_value=NotificationSendResult(False, "SMTP connection refused")
+            )
+
+            result = await service.request_email_verification(
+                "user123", "client@example.com"
+            )
+
+        instance.send_with_result.assert_awaited_once()
+        assert result["success"] is False
+        assert result["error"] == "SMTP connection refused"
+        # Failed send must clean up the verification record (no orphan codes).
+        record.delete.assert_awaited_once()
+
 
 class TestChannelOwnershipService:
     """Service-level ownership enforcement (multi-tenancy)."""
